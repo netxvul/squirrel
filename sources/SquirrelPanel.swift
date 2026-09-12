@@ -8,8 +8,13 @@
 import AppKit
 
 final class SquirrelPanel: NSPanel {
+  // macOS 27's whole-window Liquid Glass style mask is private SPI.
+  private static let windowGlassStyleMaskBit = NSWindow.StyleMask(rawValue: UInt(1) << 36)
+
   private let view: SquirrelView
   private let back: NSView
+  private let innerView: NSView
+  let usesWindowGlass: Bool
   var inputController: SquirrelInputController?
 
   var position: NSRect
@@ -36,22 +41,61 @@ final class SquirrelPanel: NSPanel {
   private var lastPage: Bool = true
   private var pagingUp: Bool?
 
-  init(position: NSRect) {
+  init(position: NSRect, windowGlass: Bool = false) {
     self.position = position
     self.view = SquirrelView(frame: position)
     self.back = Self.makeBackgroundView()
-    super.init(contentRect: position, styleMask: .nonactivatingPanel, backing: .buffered, defer: true)
+    self.innerView = NSView()
+
+    let useWindowGlass = windowGlass
+      && ProcessInfo.processInfo.isOperatingSystemAtLeast(
+        OperatingSystemVersion(majorVersion: 27, minorVersion: 0, patchVersion: 0))
+    self.usesWindowGlass = useWindowGlass
+
+    var styleMask: NSWindow.StyleMask = .nonactivatingPanel
+    if useWindowGlass {
+      styleMask.insert(Self.windowGlassStyleMaskBit)
+      // AppKit uses this regular frame class for the full Liquid Glass rim.
+      styleMask.insert(.titled)
+      styleMask.insert(.closable)
+      styleMask.insert(.fullSizeContentView)
+    }
+
+    super.init(contentRect: position, styleMask: styleMask, backing: .buffered, defer: true)
     self.level = .init(Int(CGShieldingWindowLevel()))
-    self.hasShadow = true
+    // Match the glass demo: keep the system window shadow off so it does not
+    // appear as a black outline around the non-activating input panel.
+    self.hasShadow = false
     self.isOpaque = false
     self.backgroundColor = .clear
+    if useWindowGlass {
+      titleVisibility = .hidden
+      titlebarAppearsTransparent = true
+      titlebarSeparatorStyle = .none
+      isMovable = false
+      for button: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
+        standardWindowButton(button)?.isHidden = true
+      }
+    }
+
+    view.isGlassBackground = useWindowGlass
     back.wantsLayer = true
     back.layer?.mask = view.shape
+    innerView.addSubview(back)
+    innerView.addSubview(view)
+    innerView.addSubview(view.textView)
+
     let contentView = NSView()
-    contentView.addSubview(back)
-    contentView.addSubview(view)
-    contentView.addSubview(view.textView)
+    contentView.wantsLayer = true
+    contentView.addSubview(innerView)
     self.contentView = contentView
+  }
+
+  override var canBecomeKey: Bool { false }
+  override var canBecomeMain: Bool { false }
+
+  override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+    frameRect
   }
 
   var linear: Bool {
@@ -556,23 +600,24 @@ private extension SquirrelPanel {
 
     self.setFrame(panelRect, display: true)
 
-    // Keep the window frame at the scaled physical size while drawing in natural coordinates through bounds.
-    contentView!.frame = NSRect(origin: .zero, size: panelRect.size)
-    contentView!.bounds = NSRect(origin: .zero, size: naturalPanelSize)
+    // The outer content view is managed by NSWindow. Keep natural text
+    // coordinates and vertical rotation on the inner content view instead.
+    innerView.frame = NSRect(origin: .zero, size: panelRect.size)
+    innerView.bounds = NSRect(origin: .zero, size: naturalPanelSize)
 
     if vertical {
-      contentView!.boundsRotation = -90
-      contentView!.setBoundsOrigin(NSPoint(x: 0, y: naturalPanelSize.width))
+      innerView.boundsRotation = -90
+      innerView.setBoundsOrigin(NSPoint(x: 0, y: naturalPanelSize.width))
     } else {
-      contentView!.boundsRotation = 0
-      contentView!.setBoundsOrigin(.zero)
+      innerView.boundsRotation = 0
+      innerView.setBoundsOrigin(.zero)
     }
 
     view.textView.boundsRotation = 0
     view.textView.setBoundsOrigin(.zero)
 
     // Subviews must read the post-rotation bounds; Cocoa adjusts the origin and swaps dimensions in vertical mode.
-    let subviewFrame = contentView!.bounds
+    let subviewFrame = innerView.bounds
     view.frame = subviewFrame
 
     var textFrame = subviewFrame
@@ -580,7 +625,11 @@ private extension SquirrelPanel {
     textFrame.origin.x += theme.pagingOffset
     view.textView.frame = textFrame
 
-    if theme.translucency {
+    if usesWindowGlass {
+      // The window frame supplies the Liquid Glass surface. Keeping the
+      // fallback backdrop hidden avoids compositing two glass materials.
+      back.isHidden = true
+    } else if theme.translucency {
       var backFrame = subviewFrame
       backFrame.size.width += theme.pagingOffset
       back.frame = backFrame
@@ -593,6 +642,9 @@ private extension SquirrelPanel {
     alphaValue = theme.alpha
     invalidateShadow()
     orderFront(nil)
+    if usesWindowGlass {
+      applyActiveGlassAppearance()
+    }
     // voila!
   }
 
@@ -618,15 +670,48 @@ private extension SquirrelPanel {
     return NSRange(location: startPos, length: endPos - startPos)
   }
 
+  // Ask macOS to render a non-key input panel with the active Liquid Glass
+  // appearance. These are private selectors used defensively at runtime.
+  private func applyActiveGlassAppearance() {
+    let activeSelector = NSSelectorFromString("_setHasActiveAppearance:")
+    if responds(to: activeSelector) {
+      let method = unsafeBitCast(
+        (self as NSObject).method(for: activeSelector),
+        to: (@convention(c) (NSObject, Selector, Bool) -> Void).self)
+      method(self, activeSelector, true)
+    }
+
+    let acquireSelector = NSSelectorFromString("acquireKeyAppearance")
+    if responds(to: acquireSelector) {
+      perform(acquireSelector)
+    }
+
+    let refreshSelector = NSSelectorFromString("_windowChangedKeyState")
+    let glassSelector = NSSelectorFromString("_glassWindowBackingGlassView")
+    if responds(to: glassSelector),
+       let glass = perform(glassSelector)?.takeUnretainedValue() as? NSView,
+       glass.responds(to: refreshSelector) {
+      glass.perform(refreshSelector)
+    }
+    if responds(to: refreshSelector) {
+      perform(refreshSelector)
+    }
+    if let frameView = contentView?.superview, frameView.responds(to: refreshSelector) {
+      frameView.perform(refreshSelector)
+    }
+  }
+
   static func makeBackgroundView() -> NSView {
     if #available(macOS 26.0, *) {
       let glassView = NSGlassEffectView()
       glassView.style = .regular
+      // glassView.translatesAutoresizingMaskIntoConstraints = false
+      // glassView.cornerRadius = 100
       return glassView
     } else {
       let visualEffectView = NSVisualEffectView()
       visualEffectView.blendingMode = .behindWindow
-      visualEffectView.material = .sidebar
+      visualEffectView.material = .hudWindow
       visualEffectView.state = .active
       return visualEffectView
     }

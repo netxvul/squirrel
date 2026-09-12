@@ -56,7 +56,9 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
   }
 
   func applicationWillFinishLaunching(_ notification: Notification) {
-    panel = SquirrelPanel(position: .zero)
+    // Use whole-window Liquid Glass by default on macOS 27+; SquirrelPanel
+    // keeps the existing fallback on older systems.
+    panel = SquirrelPanel(position: .zero, windowGlass: true)
     refreshStatusItem()
     addObservers()
   }

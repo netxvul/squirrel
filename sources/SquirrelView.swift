@@ -35,6 +35,9 @@ final class SquirrelView: NSView {
   // When the stacked panel opens above the caret, the preedit follows the
   // candidate rows and stays at the caret-facing bottom edge.
   var preeditAtBottom = false
+  // The macOS 27 window frame supplies the panel's Liquid Glass background.
+  // In that mode this view must not paint an opaque fill or border over it.
+  var isGlassBackground = false
   var separatorWidth: CGFloat = 0
   var shape = CAShapeLayer()
   private var downPath: CGPath?
@@ -219,7 +222,12 @@ final class SquirrelView: NSView {
     }
 
     NSBezierPath.defaultLineWidth = 0
-    backgroundPath = drawSmoothLines(rectVertex(of: backgroundRect), straightCorner: Set(), alpha: 0.3 * theme.cornerRadius, beta: 1.4 * theme.cornerRadius)
+    if isGlassBackground {
+      let radius = max(0, min(theme.cornerRadius, min(backgroundRect.width, backgroundRect.height) / 2))
+      backgroundPath = CGPath(roundedRect: backgroundRect, cornerWidth: radius, cornerHeight: radius, transform: nil)
+    } else {
+      backgroundPath = drawSmoothLines(rectVertex(of: backgroundRect), straightCorner: Set(), alpha: 0.3 * theme.cornerRadius, beta: 1.4 * theme.cornerRadius)
+    }
 
     self.layer?.sublayers = nil
     let backPath = backgroundPath?.mutableCopy()
@@ -235,7 +243,7 @@ final class SquirrelView: NSView {
       }
     }
     let panelLayer = shapeFromPath(path: backPath)
-    panelLayer.fillColor = theme.backgroundColor.cgColor
+    panelLayer.fillColor = isGlassBackground ? nil : theme.backgroundColor.cgColor
     let panelLayerMask = shapeFromPath(path: backgroundPath)
     panelLayer.mask = panelLayerMask
     self.layer?.addSublayer(panelLayer)
@@ -251,7 +259,7 @@ final class SquirrelView: NSView {
       layer.mask = mask
       panelLayer.addSublayer(layer)
     }
-    if theme.borderLineWidth > 0, let color = theme.borderColor {
+    if !isGlassBackground, theme.borderLineWidth > 0, let color = theme.borderColor {
       let borderLayer = shapeFromPath(path: backgroundPath)
       borderLayer.lineWidth = theme.borderLineWidth * 2
       borderLayer.strokeColor = color.cgColor
@@ -766,17 +774,20 @@ private extension SquirrelView {
     }
     var downPath: CGPath?
     var upPath: CGPath?
+    let pagingFill = isGlassBackground
+      ? theme.backgroundColor.withAlphaComponent(min(theme.backgroundColor.alphaComponent, 0.4))
+      : theme.backgroundColor
     if canPageDown {
       var downTransform = CGAffineTransform(translationX: 0.5 * theme.pagingOffset, y: 2 * height / 3 + preeditHeight)
       let downLayer = shapeFromPath(path: trianglePath.copy(using: &downTransform))
-      downLayer.fillColor = theme.backgroundColor.cgColor
+      downLayer.fillColor = pagingFill.cgColor
       downPath = trianglePath.copy(using: &downTransform)
       layer.addSublayer(downLayer)
     }
     if canPageUp {
       var upTransform = CGAffineTransform(rotationAngle: .pi).translatedBy(x: -0.5 * theme.pagingOffset, y: -height / 3 - preeditHeight)
       let upLayer = shapeFromPath(path: trianglePath.copy(using: &upTransform))
-      upLayer.fillColor = theme.backgroundColor.cgColor
+      upLayer.fillColor = pagingFill.cgColor
       upPath = trianglePath.copy(using: &upTransform)
       layer.addSublayer(upLayer)
     }
