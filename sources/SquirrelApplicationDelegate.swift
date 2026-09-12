@@ -80,6 +80,13 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
     }
   }
 
+  func showStatusMessage(msgTextLong: String?, msgTextShort: String?) {
+    guard enableNotifications else { return }
+    if !(msgTextLong ?? "").isEmpty || !(msgTextShort ?? "").isEmpty {
+      panel?.updateStatus(long: msgTextLong ?? "", short: msgTextShort ?? "")
+    }
+  }
+
   func deploy() {
     print("Start maintenance...")
     self.shutdownRime()
@@ -338,12 +345,6 @@ private func notificationHandler(contextObject: UnsafeMutableRawPointer?, sessio
 }
 
 private extension SquirrelApplicationDelegate {
-  func showStatusMessage(msgTextLong: String?, msgTextShort: String?) {
-    if !(msgTextLong ?? "").isEmpty || !(msgTextShort ?? "").isEmpty {
-      panel?.updateStatus(long: msgTextLong ?? "", short: msgTextShort ?? "")
-    }
-  }
-
   func refreshStatusItem() {
     if showStatusIcon {
       if statusItem == nil {

@@ -191,8 +191,12 @@ final class SquirrelInputController: IMKInputController {
     preedit = ""
     if session != 0 {
       let state = rimeAPI.get_option(session, "ascii_mode")
-      let label = rimeAPI.get_state_label_abbreviated(session, "ascii_mode", state, true).asString
-      NSApp.squirrelAppDelegate.updateStatusIcon(asciiMode: state, schemaLabel: label)
+      let shortLabel = rimeAPI.get_state_label_abbreviated(session, "ascii_mode", state, true).asString
+      let longLabel = rimeAPI.get_state_label_abbreviated(session, "ascii_mode", state, false).asString
+      let appDelegate = NSApp.squirrelAppDelegate
+      appDelegate.updateStatusIcon(asciiMode: state, schemaLabel: shortLabel)
+      appDelegate.showStatusMessage(msgTextLong: longLabel, msgTextShort: shortLabel)
+      rimeUpdate()
     }
   }
 
