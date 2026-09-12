@@ -27,6 +27,9 @@ final class SquirrelPanel: NSPanel {
   private var labels: [String] = .init()
   private var index: Int = 0
   private var cursorIndex: Int = 0
+  // Rime indices stay logical while candidateRanges uses visual indices.
+  private var candidateOrderReversed = false
+  private var pressedCandidateDisplayIndex: Int?
   private var scrollDirection: CGVector = .zero
   private var scrollTime: Date = .distantPast
   private var page: Int = 0
@@ -64,6 +67,16 @@ final class SquirrelPanel: NSPanel {
     view.currentTheme.inlineCandidate
   }
 
+  private func logicalCandidateIndex(forDisplayIndex displayIndex: Int) -> Int? {
+    guard displayIndex >= 0 && displayIndex < candidates.count else { return nil }
+    return candidateOrderReversed ? candidates.count - 1 - displayIndex : displayIndex
+  }
+
+  private func displayCandidateIndex(forLogicalIndex logicalIndex: Int) -> Int? {
+    guard logicalIndex >= 0 && logicalIndex < candidates.count else { return nil }
+    return candidateOrderReversed ? candidates.count - 1 - logicalIndex : logicalIndex
+  }
+
   // swiftlint:disable:next cyclomatic_complexity
   override func sendEvent(_ event: NSEvent) {
     switch event.type {
@@ -74,8 +87,10 @@ final class SquirrelPanel: NSPanel {
       } else {
         self.pagingUp = nil
       }
-      if let index, index >= 0 && index < candidates.count {
-        self.index = index
+      if let index, logicalCandidateIndex(forDisplayIndex: index) != nil {
+        pressedCandidateDisplayIndex = index
+      } else {
+        pressedCandidateDisplayIndex = nil
       }
     case .leftMouseUp:
       let (index, preeditIndex, pagingUp) = view.click(at: mousePosition())
@@ -92,21 +107,27 @@ final class SquirrelPanel: NSPanel {
           _ = inputController?.moveCaret(forward: false)
         }
       }
-      if let index, index == self.index && index >= 0 && index < candidates.count {
-        _ = inputController?.selectCandidate(index)
+      if let displayIndex = index,
+         displayIndex == pressedCandidateDisplayIndex,
+         let logicalIndex = logicalCandidateIndex(forDisplayIndex: displayIndex) {
+        _ = inputController?.selectCandidate(logicalIndex)
       }
+      pressedCandidateDisplayIndex = nil
     case .mouseEntered:
       acceptsMouseMovedEvents = true
     case .mouseExited:
       acceptsMouseMovedEvents = false
+      pressedCandidateDisplayIndex = nil
       if cursorIndex != index {
         update(preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates, comments: comments, labels: labels, highlighted: index, page: page, lastPage: lastPage, update: false)
       }
       pagingUp = nil
     case .mouseMoved:
-      let (index, _, _) = view.click(at: mousePosition())
-      if let index = index, cursorIndex != index && index >= 0 && index < candidates.count {
-        update(preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates, comments: comments, labels: labels, highlighted: index, page: page, lastPage: lastPage, update: false)
+      let (displayIndex, _, _) = view.click(at: mousePosition())
+      if let displayIndex,
+         let logicalIndex = logicalCandidateIndex(forDisplayIndex: displayIndex),
+         cursorIndex != logicalIndex {
+        update(preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates, comments: comments, labels: labels, highlighted: logicalIndex, page: page, lastPage: lastPage, update: false)
       }
     case .scrollWheel:
       if event.phase == .began {
@@ -147,6 +168,8 @@ final class SquirrelPanel: NSPanel {
     statusTimer = nil
     orderOut(nil)
     maxHeight = 0
+    candidateOrderReversed = false
+    pressedCandidateDisplayIndex = nil
   }
 
   // swiftlint:disable:next cyclomatic_complexity function_parameter_count
@@ -169,6 +192,8 @@ final class SquirrelPanel: NSPanel {
       statusTimer?.invalidate()
       statusTimer = nil
     } else {
+      candidateOrderReversed = false
+      view.preeditAtBottom = false
       if !statusMessage.isEmpty {
         show(status: statusMessage)
         statusMessage = ""
@@ -180,121 +205,7 @@ final class SquirrelPanel: NSPanel {
 
     let theme = view.currentTheme
     currentScreen()
-
-    let text = NSMutableAttributedString()
-    let preeditRange: NSRange
-    let highlightedPreeditRange: NSRange
-
-    if !preedit.isEmpty {
-      preeditRange = NSRange(location: 0, length: preedit.utf16.count)
-      highlightedPreeditRange = selRange
-
-      let line = NSMutableAttributedString(string: preedit)
-      line.addAttributes(theme.preeditAttrs, range: preeditRange)
-      line.addAttributes(theme.preeditHighlightedAttrs, range: selRange)
-      text.append(line)
-
-      text.addAttribute(.paragraphStyle, value: theme.preeditParagraphStyle, range: NSRange(location: 0, length: text.length))
-      if !candidates.isEmpty {
-        text.append(NSAttributedString(string: "\n", attributes: theme.preeditAttrs))
-      }
-    } else {
-      preeditRange = .empty
-      highlightedPreeditRange = .empty
-    }
-
-    var candidateRanges = [NSRange]()
-    for i in 0..<candidates.count {
-      let attrs = i == index ? theme.highlightedAttrs : theme.attrs
-      let labelAttrs = i == index ? theme.labelHighlightedAttrs : theme.labelAttrs
-      let commentAttrs = i == index ? theme.commentHighlightedAttrs : theme.commentAttrs
-
-      let label = if theme.candidateFormat.contains(/\[label\]/) {
-        if labels.count > 1 && i < labels.count {
-          labels[i]
-        } else if labels.count == 1 && i < labels.first!.count {
-          String(labels.first![labels.first!.index(labels.first!.startIndex, offsetBy: i)])
-        } else {
-          "\(i+1)"
-        }
-      } else {
-        ""
-      }
-
-      let candidate = candidates[i].precomposedStringWithCanonicalMapping
-      let comment = comments[i].precomposedStringWithCanonicalMapping
-
-      let line = NSMutableAttributedString(string: theme.candidateFormat, attributes: labelAttrs)
-      for range in line.string.ranges(of: /\[candidate\]/) {
-        let convertedRange = convert(range: range, in: line.string)
-        line.addAttributes(attrs, range: convertedRange)
-        if candidate.count <= 5 {
-          line.addAttribute(.noBreak, value: true, range: NSRange(location: convertedRange.location+1, length: convertedRange.length-1))
-        }
-      }
-      for range in line.string.ranges(of: /\[comment\]/) {
-        let convertedRange = convert(range: range, in: line.string)
-        // Apply semantic accent/warning colors only for non-highlighted rows
-        if let inputController, !inputController.specialCommentIndices.isEmpty && i != index {
-          var newCommentAttrs = commentAttrs
-          if let accent = inputController.specialCommentIndices[.commentHighlight], accent.contains(i) {
-            newCommentAttrs[.foregroundColor] = theme.accentCommentTextColor
-          } else if let warning = inputController.specialCommentIndices[.commentWarning], warning.contains(i) {
-            newCommentAttrs[.foregroundColor] = theme.warningCommentTextColor
-          }
-          line.addAttributes(newCommentAttrs, range: convertedRange)
-        } else {
-          line.addAttributes(commentAttrs, range: convertedRange)
-        }
-      }
-      line.mutableString.replaceOccurrences(of: "[label]", with: label, range: NSRange(location: 0, length: line.length))
-      let labeledLine = line.copy() as! NSAttributedString
-      line.mutableString.replaceOccurrences(of: "[candidate]", with: candidate, range: NSRange(location: 0, length: line.length))
-      line.mutableString.replaceOccurrences(of: "[comment]", with: comment, range: NSRange(location: 0, length: line.length))
-
-      if line.length <= 10 {
-        line.addAttribute(.noBreak, value: true, range: NSRange(location: 1, length: line.length-1))
-      }
-
-      let lineSeparator = NSAttributedString(string: linear ? "  " : "\n", attributes: attrs)
-      if i > 0 {
-        text.append(lineSeparator)
-      }
-      let str = lineSeparator.mutableCopy() as! NSMutableAttributedString
-      if vertical {
-        str.addAttribute(.verticalGlyphForm, value: 1, range: NSRange(location: 0, length: str.length))
-      }
-      view.separatorWidth = str.boundingRect(with: .zero).width
-
-      let paragraphStyleCandidate = (i == 0 ? theme.firstParagraphStyle : theme.paragraphStyle).mutableCopy() as! NSMutableParagraphStyle
-      if linear {
-        paragraphStyleCandidate.paragraphSpacingBefore -= theme.linespace
-        paragraphStyleCandidate.lineSpacing = theme.linespace
-      }
-      if !linear, let labelEnd = labeledLine.string.firstMatch(of: /\[(candidate|comment)\]/)?.range.lowerBound {
-        let labelString = labeledLine.attributedSubstring(from: NSRange(location: 0, length: labelEnd.utf16Offset(in: labeledLine.string)))
-        let labelWidth = labelString.boundingRect(with: .zero, options: [.usesLineFragmentOrigin]).width
-        paragraphStyleCandidate.headIndent = labelWidth
-      }
-      line.addAttribute(.paragraphStyle, value: paragraphStyleCandidate, range: NSRange(location: 0, length: line.length))
-
-      candidateRanges.append(NSRange(location: text.length, length: line.length))
-      text.append(line)
-    }
-
-    view.textView.textContentStorage?.attributedString = text
-    view.textView.setLayoutOrientation(vertical ? .vertical : .horizontal)
-
-    // Force TextKit 2 layout before measuring wrapped text and highlight bounds.
-    let textWidth = maxTextWidth()
-    let maxTextHeight = vertical ? screenRect.width - theme.edgeInset.width * 2 : screenRect.height - theme.edgeInset.height * 2
-    view.textContainer.size = NSSize(width: textWidth, height: maxTextHeight)
-    view.textLayoutManager.ensureLayout(for: view.textLayoutManager.documentRange)
-
-    // Keep very tall wrapped text from auto-scrolling past the first line.
-    view.textView.scrollToBeginningOfDocument(nil)
-
-    view.drawView(candidateRanges: candidateRanges, hilightedIndex: index, preeditRange: preeditRange, highlightedPreeditRange: highlightedPreeditRange, canPageUp: page > 0, canPageDown: !lastPage)
+    renderCurrentText(highlighted: index, theme: theme)
     show()
   }
 
@@ -328,6 +239,138 @@ final class SquirrelPanel: NSPanel {
 }
 
 private extension SquirrelPanel {
+  func renderCurrentText(highlighted index: Int, theme: SquirrelTheme) {
+    let text = NSMutableAttributedString()
+    let preeditAtBottom = candidateOrderReversed && !preedit.isEmpty && !candidates.isEmpty
+    view.preeditAtBottom = preeditAtBottom
+
+    var preeditRange = NSRange.empty
+    var highlightedPreeditRange = NSRange.empty
+
+    func appendPreedit() {
+      guard !preedit.isEmpty else { return }
+      let localRange = NSRange(location: 0, length: preedit.utf16.count)
+      preeditRange = NSRange(location: text.length, length: localRange.length)
+      highlightedPreeditRange = NSRange(location: text.length + selRange.location, length: selRange.length)
+
+      let line = NSMutableAttributedString(string: preedit)
+      line.addAttributes(theme.preeditAttrs, range: localRange)
+      line.addAttributes(theme.preeditHighlightedAttrs, range: selRange)
+      text.append(line)
+      text.addAttribute(.paragraphStyle, value: theme.preeditParagraphStyle, range: preeditRange)
+    }
+
+    if !preeditAtBottom {
+      appendPreedit()
+      if !preedit.isEmpty && !candidates.isEmpty {
+        text.append(NSAttributedString(string: "\n", attributes: theme.preeditAttrs))
+      }
+    }
+
+    var candidateRanges = [NSRange]()
+    let displayOrder = candidateOrderReversed ? Array(candidates.indices.reversed()) : Array(candidates.indices)
+    for (displayIndex, logicalIndex) in displayOrder.enumerated() {
+      let isHighlighted = logicalIndex == index
+      let attrs = isHighlighted ? theme.highlightedAttrs : theme.attrs
+      let labelAttrs = isHighlighted ? theme.labelHighlightedAttrs : theme.labelAttrs
+      let commentAttrs = isHighlighted ? theme.commentHighlightedAttrs : theme.commentAttrs
+
+      let label = if theme.candidateFormat.contains(/\[label\]/) {
+        if labels.count > 1 && logicalIndex < labels.count {
+          labels[logicalIndex]
+        } else if labels.count == 1 && logicalIndex < labels.first!.count {
+          String(labels.first![labels.first!.index(labels.first!.startIndex, offsetBy: logicalIndex)])
+        } else {
+          "\(logicalIndex + 1)"
+        }
+      } else {
+        ""
+      }
+
+      let candidate = candidates[logicalIndex].precomposedStringWithCanonicalMapping
+      let comment = comments[logicalIndex].precomposedStringWithCanonicalMapping
+      let line = NSMutableAttributedString(string: theme.candidateFormat, attributes: labelAttrs)
+      for range in line.string.ranges(of: /\[candidate\]/) {
+        let convertedRange = convert(range: range, in: line.string)
+        line.addAttributes(attrs, range: convertedRange)
+        if candidate.count <= 5 {
+          line.addAttribute(.noBreak, value: true, range: NSRange(location: convertedRange.location + 1, length: convertedRange.length - 1))
+        }
+      }
+      for range in line.string.ranges(of: /\[comment\]/) {
+        let convertedRange = convert(range: range, in: line.string)
+        // Apply semantic accent/warning colors only for non-highlighted rows.
+        if let inputController, !inputController.specialCommentIndices.isEmpty && !isHighlighted {
+          var newCommentAttrs = commentAttrs
+          if let accent = inputController.specialCommentIndices[.commentHighlight], accent.contains(logicalIndex) {
+            newCommentAttrs[.foregroundColor] = theme.accentCommentTextColor
+          } else if let warning = inputController.specialCommentIndices[.commentWarning], warning.contains(logicalIndex) {
+            newCommentAttrs[.foregroundColor] = theme.warningCommentTextColor
+          }
+          line.addAttributes(newCommentAttrs, range: convertedRange)
+        } else {
+          line.addAttributes(commentAttrs, range: convertedRange)
+        }
+      }
+      line.mutableString.replaceOccurrences(of: "[label]", with: label, range: NSRange(location: 0, length: line.length))
+      let labeledLine = line.copy() as! NSAttributedString
+      line.mutableString.replaceOccurrences(of: "[candidate]", with: candidate, range: NSRange(location: 0, length: line.length))
+      line.mutableString.replaceOccurrences(of: "[comment]", with: comment, range: NSRange(location: 0, length: line.length))
+
+      if line.length <= 10 {
+        line.addAttribute(.noBreak, value: true, range: NSRange(location: 1, length: line.length - 1))
+      }
+
+      let lineSeparator = NSAttributedString(string: linear ? "  " : "\n", attributes: attrs)
+      if displayIndex > 0 {
+        text.append(lineSeparator)
+      }
+      let str = lineSeparator.mutableCopy() as! NSMutableAttributedString
+      if vertical {
+        str.addAttribute(.verticalGlyphForm, value: 1, range: NSRange(location: 0, length: str.length))
+      }
+      view.separatorWidth = str.boundingRect(with: .zero).width
+
+      let paragraphStyleCandidate = (displayIndex == 0 ? theme.firstParagraphStyle : theme.paragraphStyle).mutableCopy() as! NSMutableParagraphStyle
+      if linear {
+        paragraphStyleCandidate.paragraphSpacingBefore -= theme.linespace
+        paragraphStyleCandidate.lineSpacing = theme.linespace
+      }
+      if !linear, let labelEnd = labeledLine.string.firstMatch(of: /\[(candidate|comment)\]/)?.range.lowerBound {
+        let labelString = labeledLine.attributedSubstring(from: NSRange(location: 0, length: labelEnd.utf16Offset(in: labeledLine.string)))
+        let labelWidth = labelString.boundingRect(with: .zero, options: [.usesLineFragmentOrigin]).width
+        paragraphStyleCandidate.headIndent = labelWidth
+      }
+      line.addAttribute(.paragraphStyle, value: paragraphStyleCandidate, range: NSRange(location: 0, length: line.length))
+
+      candidateRanges.append(NSRange(location: text.length, length: line.length))
+      text.append(line)
+    }
+
+    if preeditAtBottom {
+      if !text.string.isEmpty {
+        text.append(NSAttributedString(string: "\n", attributes: theme.preeditAttrs))
+      }
+      appendPreedit()
+    }
+
+    view.textView.textContentStorage?.attributedString = text
+    view.textView.setLayoutOrientation(vertical ? .vertical : .horizontal)
+
+    // Force TextKit 2 layout before measuring wrapped text and highlight bounds.
+    let textWidth = maxTextWidth()
+    let maxTextHeight = vertical ? screenRect.width - theme.edgeInset.width * 2 : screenRect.height - theme.edgeInset.height * 2
+    view.textContainer.size = NSSize(width: textWidth, height: maxTextHeight)
+    view.textLayoutManager.ensureLayout(for: view.textLayoutManager.documentRange)
+    view.textView.scrollToBeginningOfDocument(nil)
+    view.drawView(candidateRanges: candidateRanges,
+                  hilightedIndex: displayCandidateIndex(forLogicalIndex: index) ?? -1,
+                  preeditRange: preeditRange,
+                  highlightedPreeditRange: highlightedPreeditRange,
+                  canPageUp: page > 0,
+                  canPageDown: !lastPage)
+  }
+
   func mousePosition() -> NSPoint {
     var point = NSEvent.mouseLocation
     point = self.convertPoint(fromScreen: point)
@@ -358,7 +401,7 @@ private extension SquirrelPanel {
   }
 
   // swiftlint:disable:next cyclomatic_complexity
-  func show() {
+  func show(layoutPass: Int = 0) {
     currentScreen()
     let theme = view.currentTheme
     if theme.native || view.darkTheme.available {
@@ -486,6 +529,31 @@ private extension SquirrelPanel {
       if panelRect.minY < screenRect.minY { panelRect.origin.y = screenRect.minY }
     }
 
+    // In a stacked horizontal panel above the caret, put logical candidate 0
+    // nearest the caret by reversing only the visual order. The panel size is
+    // unchanged, so one additional layout pass is enough after the side is known.
+    let panelIsAboveCaret: Bool
+    if requiresFullScreen {
+      panelIsAboveCaret = false
+    } else if panelRect.minY >= position.maxY {
+      panelIsAboveCaret = true
+    } else if panelRect.maxY <= position.minY {
+      panelIsAboveCaret = false
+    } else {
+      panelIsAboveCaret = panelRect.midY > position.midY
+    }
+    let wantsReversedCandidates = !candidates.isEmpty
+      && !linear
+      && !vertical
+      && theme.candidateListReversedAboveCursor
+      && panelIsAboveCaret
+    if wantsReversedCandidates != candidateOrderReversed && layoutPass == 0 {
+      candidateOrderReversed = wantsReversedCandidates
+      renderCurrentText(highlighted: cursorIndex, theme: theme)
+      show(layoutPass: layoutPass + 1)
+      return
+    }
+
     self.setFrame(panelRect, display: true)
 
     // Keep the window frame at the scaled physical size while drawing in natural coordinates through bounds.
@@ -553,12 +621,12 @@ private extension SquirrelPanel {
   static func makeBackgroundView() -> NSView {
     if #available(macOS 26.0, *) {
       let glassView = NSGlassEffectView()
-      glassView.style = .clear
+      glassView.style = .regular
       return glassView
     } else {
       let visualEffectView = NSVisualEffectView()
       visualEffectView.blendingMode = .behindWindow
-      visualEffectView.material = .hudWindow
+      visualEffectView.material = .sidebar
       visualEffectView.state = .active
       return visualEffectView
     }

@@ -32,6 +32,9 @@ final class SquirrelView: NSView {
   var canPageUp: Bool = false
   var canPageDown: Bool = false
   var highlightedPreeditRange: NSRange = .empty
+  // When the stacked panel opens above the caret, the preedit follows the
+  // candidate rows and stays at the caret-facing bottom edge.
+  var preeditAtBottom = false
   var separatorWidth: CGFloat = 0
   var shape = CAShapeLayer()
   private var downPath: CGPath?
@@ -144,12 +147,18 @@ final class SquirrelView: NSView {
       preeditRect = contentRect(range: preeditTextRange)
       preeditRect.size.width = backgroundRect.size.width
       preeditRect.size.height += theme.edgeInset.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2
-      preeditRect.origin = backgroundRect.origin
       if candidateRanges.count == 0 {
         preeditRect.size.height += theme.edgeInset.height - theme.preeditLinespace / 2 - theme.hilitedCornerRadius / 2
       }
+      if preeditAtBottom {
+        preeditRect.origin.y = backgroundRect.maxY - preeditRect.height
+      } else {
+        preeditRect.origin = backgroundRect.origin
+      }
       containingRect.size.height -= preeditRect.size.height
-      containingRect.origin.y += preeditRect.size.height
+      if !preeditAtBottom {
+        containingRect.origin.y += preeditRect.size.height
+      }
       if theme.preeditBackgroundColor != nil {
         preeditPath = drawSmoothLines(rectVertex(of: preeditRect), straightCorner: Set(), alpha: 0, beta: 0)
       }
@@ -640,6 +649,12 @@ private extension SquirrelView {
     if preeditRange.length == 0 {
       innerBox.origin.y += theme.edgeInset.height + 1
       innerBox.size.height -= (theme.edgeInset.height + 1) * 2
+    } else if preeditAtBottom {
+      // Candidates occupy the upper part of the panel; leave the preedit's
+      // spacing and bottom inset below them instead of carving from the top.
+      innerBox.origin.y += theme.edgeInset.height + 1
+      innerBox.size.height -= theme.edgeInset.height + preeditRect.size.height
+        + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 2
     } else {
       innerBox.origin.y += preeditRect.size.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 1
       innerBox.size.height -= theme.edgeInset.height + preeditRect.size.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 2
@@ -651,7 +666,7 @@ private extension SquirrelView {
     outerBox.size.height -= preeditRect.size.height + max(0, theme.hilitedCornerRadius + theme.borderLineWidth) - 2 * extraExpansion
     outerBox.size.width -= max(0, theme.hilitedCornerRadius + theme.borderLineWidth)  - 2 * extraExpansion
     outerBox.origin.x += max(0.0, theme.hilitedCornerRadius + theme.borderLineWidth) / 2.0 - extraExpansion
-    outerBox.origin.y += preeditRect.size.height + max(0, theme.hilitedCornerRadius + theme.borderLineWidth) / 2 - extraExpansion
+    outerBox.origin.y += (preeditAtBottom ? 0 : preeditRect.size.height) + max(0, theme.hilitedCornerRadius + theme.borderLineWidth) / 2 - extraExpansion
 
     let effectiveRadius = max(0, theme.hilitedCornerRadius + 2 * extraExpansion / theme.hilitedCornerRadius * max(0, theme.cornerRadius - theme.hilitedCornerRadius))
 
@@ -679,16 +694,30 @@ private extension SquirrelView {
         highlightedRect.size.width = backgroundRect.size.width
         highlightedRect.size.height += theme.linespace
         highlightedRect.origin = NSPoint(x: backgroundRect.origin.x, y: highlightedRect.origin.y + theme.edgeInset.height - halfLinespace)
-        if highlightedRange.upperBound == (textView.string as NSString).length {
-          highlightedRect.size.height += theme.edgeInset.height - halfLinespace
-        }
-        if highlightedRange.location - (preeditRange == .empty ? 0 : preeditRange.upperBound) <= 1 {
-          if preeditRange.length == 0 {
+        let contentLength = textContentStorage.attributedString?.length ?? 0
+        if preeditAtBottom {
+          // The visual order is reversed, so the first text range is at the
+          // top edge while the preedit is at the bottom edge.
+          if highlightedRange.location == 0 {
             highlightedRect.size.height += theme.edgeInset.height - halfLinespace
             highlightedRect.origin.y -= theme.edgeInset.height - halfLinespace
-          } else {
+          }
+          if preeditRange.length > 0,
+             preeditRange.location - highlightedRange.upperBound <= 1 {
             highlightedRect.size.height += theme.hilitedCornerRadius / 2
-            highlightedRect.origin.y -= theme.hilitedCornerRadius / 2
+          }
+        } else {
+          if highlightedRange.upperBound == contentLength {
+            highlightedRect.size.height += theme.edgeInset.height - halfLinespace
+          }
+          if highlightedRange.location - (preeditRange == .empty ? 0 : preeditRange.upperBound) <= 1 {
+            if preeditRange.length == 0 {
+              highlightedRect.size.height += theme.edgeInset.height - halfLinespace
+              highlightedRect.origin.y -= theme.edgeInset.height - halfLinespace
+            } else {
+              highlightedRect.size.height += theme.hilitedCornerRadius / 2
+              highlightedRect.origin.y -= theme.hilitedCornerRadius / 2
+            }
           }
         }
 

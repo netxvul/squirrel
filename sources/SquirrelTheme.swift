@@ -69,6 +69,9 @@ final class SquirrelTheme {
   private(set) var inlinePreedit = false
   private(set) var inlineCandidate = false
   private(set) var showPaging = false
+  // In stacked horizontal layout, keep candidate 1 nearest the caret when
+  // the panel opens above it.
+  private(set) var candidateListReversedAboveCursor = true
 
   private var fonts = [NSFont]()
   private var labelFonts = [NSFont]()
@@ -214,6 +217,8 @@ final class SquirrelTheme {
     mutualExclusive ?= config.getBool("style/mutual_exclusive")
     memorizeSize ?= config.getBool("style/memorize_size")
     showPaging ?= config.getBool("style/show_paging")
+    candidateListReversedAboveCursor
+      ?= config.getBool("style/candidate_list_reversed_above_cursor")
 
     statusMessageType ?= .init(rawValue: config.getString("style/status_message_type") ?? "")
     candidateFormat ?= config.getString("style/candidate_format")
@@ -270,6 +275,8 @@ final class SquirrelTheme {
         translucency ?= config.getBool("\(prefix)/translucency")
         mutualExclusive ?= config.getBool("\(prefix)/mutual_exclusive")
         showPaging ?= config.getBool("\(prefix)/show_paging")
+        candidateListReversedAboveCursor
+          ?= config.getBool("\(prefix)/candidate_list_reversed_above_cursor")
         candidateFormat ?= config.getString("\(prefix)/candidate_format")
         fontName ?= config.getString("\(prefix)/font_face")
         fontSize ?= config.getDouble("\(prefix)/font_point")

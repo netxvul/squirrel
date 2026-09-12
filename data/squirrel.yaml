@@ -32,6 +32,9 @@ style:
 
   # horizontal is Deprecated since 0.36, Squirrel 0.15, removed since 1.0.1
   candidate_list_layout: stacked  # stacked | linear
+  # When stacked and the panel opens above the caret, reverse the current
+  # page so candidate 1 remains nearest the caret.
+  #candidate_list_reversed_above_cursor: true
   text_orientation: horizontal  # horizontal | vertical
   inline_preedit: true
   # Whether to embed selected candidate as text in input field
