@@ -446,6 +446,7 @@ private extension SquirrelPanel {
 
   // swiftlint:disable:next cyclomatic_complexity
   func show(layoutPass: Int = 0) {
+    let wasVisible = isVisible
     currentScreen()
     let theme = view.currentTheme
     if theme.native || view.darkTheme.available {
@@ -641,8 +642,10 @@ private extension SquirrelPanel {
 
     alphaValue = theme.alpha
     invalidateShadow()
-    orderFront(nil)
-    if usesWindowGlass {
+    if !usesWindowGlass || !wasVisible {
+      orderFront(nil)
+    }
+    if usesWindowGlass && !wasVisible {
       applyActiveGlassAppearance()
     }
     // voila!
