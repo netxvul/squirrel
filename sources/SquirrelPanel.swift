@@ -400,6 +400,14 @@ final class SquirrelPanel: NSPanel {
 }
 
 private extension SquirrelPanel {
+  func statusEdgeInset(for theme: SquirrelTheme) -> NSSize {
+    // A status toast contains one short line. Reusing the candidate inset
+    // makes corner_radius contribute twice to a very small window.
+    let horizontal = min(max(theme.edgeInset.width, 0), 10)
+    let vertical = min(max(theme.edgeInset.height, 0), 6)
+    return NSSize(width: max(horizontal, 6), height: max(vertical, 4))
+  }
+
   func applyGlassConfiguration(theme: SquirrelTheme) {
     view.isGlassBackground = usesWindowGlass || (usesViewGlass && theme.translucency)
     if usesWindowGlass {
@@ -419,7 +427,7 @@ private extension SquirrelPanel {
   // the panel is ordered on screen. It is still an NSGlassEffectView, but it
   // is not exposed as a public NSWindow property. Use the existing guarded
   // runtime hook to apply the same public Glass properties to that backing.
-  func applyWindowGlassConfiguration(theme: SquirrelTheme) {
+  func applyWindowGlassConfiguration(theme: SquirrelTheme, radius: CGFloat? = nil) {
     guard usesWindowGlass, #available(macOS 26.0, *) else { return }
     let glassSelector = NSSelectorFromString("_glassWindowBackingGlassView")
     guard responds(to: glassSelector),
@@ -433,7 +441,7 @@ private extension SquirrelPanel {
       let setRadius = unsafeBitCast(
         glassView.method(for: radiusSelector),
         to: (@convention(c) (NSObject, Selector, CGFloat) -> Void).self)
-      setRadius(glassView, radiusSelector, max(0, theme.cornerRadius))
+      setRadius(glassView, radiusSelector, max(0, radius ?? theme.cornerRadius))
     }
 
     let tintSelector = NSSelectorFromString("setTintColor:")
@@ -629,8 +637,6 @@ private extension SquirrelPanel {
       self.appearance = NSAppearance(named: .aqua)
     }
 
-    view.textView.textContainerInset = theme.edgeInset
-
     var naturalPanelSize = NSSize.zero
     var panelRect = NSRect.zero
     var requiresFullScreen = false
@@ -640,6 +646,9 @@ private extension SquirrelPanel {
     // panels are different content modes: they must not share the memorized
     // width, and switching between them swaps instantly instead of morphing.
     let showingStatus = candidates.isEmpty && preedit.isEmpty
+    let edgeInset = showingStatus ? statusEdgeInset(for: theme) : theme.edgeInset
+    view.panelEdgeInset = showingStatus ? edgeInset : nil
+    view.textView.textContainerInset = edgeInset
     if showingStatus != lastShowWasStatus {
       maxHeight = 0
     }
@@ -657,11 +666,11 @@ private extension SquirrelPanel {
 
       var contentRect = view.contentRect
       if vertical {
-        naturalPanelSize.width = contentRect.height + theme.edgeInset.height * 2
-        naturalPanelSize.height = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
+        naturalPanelSize.width = contentRect.height + edgeInset.height * 2
+        naturalPanelSize.height = contentRect.width + edgeInset.width * 2 + theme.pagingOffset
       } else {
-        naturalPanelSize.width = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
-        naturalPanelSize.height = contentRect.height + theme.edgeInset.height * 2
+        naturalPanelSize.width = contentRect.width + edgeInset.width * 2 + theme.pagingOffset
+        naturalPanelSize.height = contentRect.height + edgeInset.height * 2
       }
 
       let maxAllowedWidth = screenRect.width * 0.95
@@ -678,11 +687,11 @@ private extension SquirrelPanel {
           view.textLayoutManager.ensureLayout(for: view.textLayoutManager.documentRange)
           contentRect = view.contentRect
           if vertical {
-            naturalPanelSize.width = contentRect.height + theme.edgeInset.height * 2
-            naturalPanelSize.height = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
+            naturalPanelSize.width = contentRect.height + edgeInset.height * 2
+            naturalPanelSize.height = contentRect.width + edgeInset.width * 2 + theme.pagingOffset
           } else {
-            naturalPanelSize.width = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
-            naturalPanelSize.height = contentRect.height + theme.edgeInset.height * 2
+            naturalPanelSize.width = contentRect.width + edgeInset.width * 2 + theme.pagingOffset
+            naturalPanelSize.height = contentRect.height + edgeInset.height * 2
           }
         }
       }
@@ -699,15 +708,15 @@ private extension SquirrelPanel {
         maxHeight = 0
       } else {
         if theme.memorizeSize && (vertical && position.midY / screenRect.height < 0.5) ||
-            (vertical && position.minX + max(contentRect.width, maxHeight) + theme.edgeInset.width * 2 > screenRect.maxX) {
+            (vertical && position.minX + max(contentRect.width, maxHeight) + edgeInset.width * 2 > screenRect.maxX) {
           if contentRect.width >= maxHeight {
             maxHeight = contentRect.width
           } else {
             contentRect.size.width = maxHeight
             if vertical {
-              naturalPanelSize.height = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
+              naturalPanelSize.height = contentRect.width + edgeInset.width * 2 + theme.pagingOffset
             } else {
-              naturalPanelSize.width = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
+              naturalPanelSize.width = contentRect.width + edgeInset.width * 2 + theme.pagingOffset
             }
           }
         }
@@ -725,7 +734,7 @@ private extension SquirrelPanel {
           let widthQuantum: CGFloat = 20
           let quantizedWidth = (contentRect.width / widthQuantum).rounded(.up) * widthQuantum
           contentRect.size.width = quantizedWidth
-          naturalPanelSize.width = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
+          naturalPanelSize.width = contentRect.width + edgeInset.width * 2 + theme.pagingOffset
         }
 
         // TextKit 2 can report fractional line bounds that differ by a small
@@ -748,7 +757,7 @@ private extension SquirrelPanel {
           panelRect.origin.x = position.minX - panelRect.width - SquirrelTheme.offsetHeight
           if view.preeditRange.length > 0, let preeditTextRange = view.convert(range: view.preeditRange) {
             let preeditRect = view.contentRect(range: preeditTextRange)
-            panelRect.origin.x += preeditRect.height + theme.edgeInset.width
+            panelRect.origin.x += preeditRect.height + edgeInset.width
           }
         } else {
           panelRect.origin = NSPoint(x: position.minX - theme.pagingOffset, y: position.minY - SquirrelTheme.offsetHeight - panelRect.height)
@@ -937,8 +946,10 @@ private extension SquirrelPanel {
     }
     if usesWindowGlass {
       // AppKit creates the window Glass backing during orderFront. Apply the
-      // radius again so the first visible frame uses the configured shape.
-      applyWindowGlassConfiguration(theme: theme)
+      // final, size-clamped radius so short status toasts do not become
+      // oversized capsules.
+      let radius = min(max(0, theme.cornerRadius), min(panelRect.width, panelRect.height) / 2)
+      applyWindowGlassConfiguration(theme: theme, radius: radius)
     }
     if usesWindowGlass && !wasVisible {
       // The glass backing view exists only after the window is ordered in;

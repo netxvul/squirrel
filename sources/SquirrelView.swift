@@ -38,6 +38,9 @@ final class SquirrelView: NSView {
   // The macOS 27 window frame supplies the panel's Liquid Glass background.
   // In that mode this view must not paint an opaque fill or border over it.
   var isGlassBackground = false
+  // Status notifications use a compact inset instead of the candidate
+  // panel's corner-radius-derived inset.
+  var panelEdgeInset: NSSize?
   var separatorWidth: CGFloat = 0
   var shape = CAShapeLayer()
   // Keep the presentation tree attached while the candidate geometry changes.
@@ -147,6 +150,7 @@ final class SquirrelView: NSView {
     var highlightedPath: CGMutablePath?
     var highlightedPreeditPath: CGMutablePath?
     let theme = currentTheme
+    let edgeInset = panelEdgeInset ?? theme.edgeInset
 
     var containingRect = self.bounds
     containingRect.size.width -= theme.pagingOffset
@@ -156,9 +160,9 @@ final class SquirrelView: NSView {
     if preeditRange.length > 0, let preeditTextRange = convert(range: preeditRange) {
       preeditRect = contentRect(range: preeditTextRange)
       preeditRect.size.width = backgroundRect.size.width
-      preeditRect.size.height += theme.edgeInset.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2
+      preeditRect.size.height += edgeInset.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2
       if candidateRanges.count == 0 {
-        preeditRect.size.height += theme.edgeInset.height - theme.preeditLinespace / 2 - theme.hilitedCornerRadius / 2
+        preeditRect.size.height += edgeInset.height - theme.preeditLinespace / 2 - theme.hilitedCornerRadius / 2
       }
       if preeditAtBottom {
         preeditRect.origin.y = backgroundRect.maxY - preeditRect.height
@@ -197,13 +201,13 @@ final class SquirrelView: NSView {
 
     if (highlightedPreeditRange.length > 0) && (theme.highlightedPreeditColor != nil), let highlightedPreeditTextRange = convert(range: highlightedPreeditRange) {
       var innerBox = preeditRect
-      innerBox.size.width -= (theme.edgeInset.width + 1) * 2
-      innerBox.origin.x += theme.edgeInset.width + 1
-      innerBox.origin.y += theme.edgeInset.height + 1
+      innerBox.size.width -= (edgeInset.width + 1) * 2
+      innerBox.origin.x += edgeInset.width + 1
+      innerBox.origin.y += edgeInset.height + 1
       if candidateRanges.count == 0 {
-        innerBox.size.height -= (theme.edgeInset.height + 1) * 2
+        innerBox.size.height -= (edgeInset.height + 1) * 2
       } else {
-        innerBox.size.height -= theme.edgeInset.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 2
+        innerBox.size.height -= edgeInset.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 2
       }
       var outerBox = preeditRect
       outerBox.size.height -= max(0, theme.hilitedCornerRadius + theme.borderLineWidth)
@@ -436,7 +440,7 @@ private extension SquirrelView {
 
   // Split a multiline range into leading, complete-body, and trailing boxes.
   func multilineRects(forRange range: NSTextRange, extraSurounding: Double, bounds: NSRect) -> (NSRect, NSRect, NSRect) {
-    let edgeInset = currentTheme.edgeInset
+    let edgeInset = panelEdgeInset ?? currentTheme.edgeInset
     var lineRects = [NSRect]()
     textLayoutManager.enumerateTextSegments(in: range, type: .selection, options: [.rangeNotRequired]) { _, rect, _, _ in
       var newRect = rect
@@ -648,6 +652,7 @@ private extension SquirrelView {
 
   func drawPath(highlightedRange: NSRange, backgroundRect: NSRect, preeditRect: NSRect, containingRect: NSRect, extraExpansion: Double) -> CGPath? {
     let theme = currentTheme
+    let edgeInset = panelEdgeInset ?? theme.edgeInset
     let resultingPath: CGMutablePath?
 
     var currentContainingRect = containingRect
@@ -658,22 +663,22 @@ private extension SquirrelView {
 
     let halfLinespace = theme.linespace / 2
     var innerBox = backgroundRect
-    innerBox.size.width -= (theme.edgeInset.width + 1) * 2 - 2 * extraExpansion
-    innerBox.origin.x += theme.edgeInset.width + 1 - extraExpansion
+    innerBox.size.width -= (edgeInset.width + 1) * 2 - 2 * extraExpansion
+    innerBox.origin.x += edgeInset.width + 1 - extraExpansion
     innerBox.size.height += 2 * extraExpansion
     innerBox.origin.y -= extraExpansion
     if preeditRange.length == 0 {
-      innerBox.origin.y += theme.edgeInset.height + 1
-      innerBox.size.height -= (theme.edgeInset.height + 1) * 2
+      innerBox.origin.y += edgeInset.height + 1
+      innerBox.size.height -= (edgeInset.height + 1) * 2
     } else if preeditAtBottom {
       // Candidates occupy the upper part of the panel; leave the preedit's
       // spacing and bottom inset below them instead of carving from the top.
-      innerBox.origin.y += theme.edgeInset.height + 1
-      innerBox.size.height -= theme.edgeInset.height + preeditRect.size.height
+      innerBox.origin.y += edgeInset.height + 1
+      innerBox.size.height -= edgeInset.height + preeditRect.size.height
         + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 2
     } else {
       innerBox.origin.y += preeditRect.size.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 1
-      innerBox.size.height -= theme.edgeInset.height + preeditRect.size.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 2
+      innerBox.size.height -= edgeInset.height + preeditRect.size.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 2
     }
     innerBox.size.height -= theme.linespace
     innerBox.origin.y += halfLinespace
@@ -710,14 +715,14 @@ private extension SquirrelView {
       if !nearEmpty(highlightedRect) {
         highlightedRect.size.width = backgroundRect.size.width
         highlightedRect.size.height += theme.linespace
-        highlightedRect.origin = NSPoint(x: backgroundRect.origin.x, y: highlightedRect.origin.y + theme.edgeInset.height - halfLinespace)
+        highlightedRect.origin = NSPoint(x: backgroundRect.origin.x, y: highlightedRect.origin.y + edgeInset.height - halfLinespace)
         let contentLength = textContentStorage.attributedString?.length ?? 0
         if preeditAtBottom {
           // The visual order is reversed, so the first text range is at the
           // top edge while the preedit is at the bottom edge.
           if highlightedRange.location == 0 {
-            highlightedRect.size.height += theme.edgeInset.height - halfLinespace
-            highlightedRect.origin.y -= theme.edgeInset.height - halfLinespace
+            highlightedRect.size.height += edgeInset.height - halfLinespace
+            highlightedRect.origin.y -= edgeInset.height - halfLinespace
           }
           if preeditRange.length > 0,
              preeditRange.location - highlightedRange.upperBound <= 1 {
@@ -725,12 +730,12 @@ private extension SquirrelView {
           }
         } else {
           if highlightedRange.upperBound == contentLength {
-            highlightedRect.size.height += theme.edgeInset.height - halfLinespace
+            highlightedRect.size.height += edgeInset.height - halfLinespace
           }
           if highlightedRange.location - (preeditRange == .empty ? 0 : preeditRange.upperBound) <= 1 {
             if preeditRange.length == 0 {
-              highlightedRect.size.height += theme.edgeInset.height - halfLinespace
-              highlightedRect.origin.y -= theme.edgeInset.height - halfLinespace
+              highlightedRect.size.height += edgeInset.height - halfLinespace
+              highlightedRect.origin.y -= edgeInset.height - halfLinespace
             } else {
               highlightedRect.size.height += theme.hilitedCornerRadius / 2
               highlightedRect.origin.y -= theme.hilitedCornerRadius / 2
@@ -769,10 +774,11 @@ private extension SquirrelView {
 
   func pagingLayer(theme: SquirrelTheme, preeditRect: CGRect) -> (CAShapeLayer, CGPath?, CGPath?) {
     let layer = CAShapeLayer()
+    let edgeInset = panelEdgeInset ?? theme.edgeInset
     guard theme.showPaging && (canPageUp || canPageDown) else { return (layer, nil, nil) }
     guard let firstCandidate = candidateRanges.first, let range = convert(range: firstCandidate) else { return (layer, nil, nil) }
     var height = contentRect(range: range).height
-    let preeditHeight = max(0, preeditRect.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 - theme.edgeInset.height) + theme.edgeInset.height - theme.linespace / 2
+    let preeditHeight = max(0, preeditRect.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 - edgeInset.height) + edgeInset.height - theme.linespace / 2
     height += theme.linespace
     let radius = min(0.5 * theme.pagingOffset, 2 * height / 9)
     let effectiveRadius = min(theme.cornerRadius, 0.6 * radius)
