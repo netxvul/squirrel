@@ -53,6 +53,7 @@ final class SquirrelTheme {
 
   private(set) var cornerRadius: CGFloat = 0
   private(set) var hilitedCornerRadius: CGFloat = 0
+  private(set) var hilitedCandidateInset: CGFloat = 0
   private(set) var surroundingExtraExpansion: CGFloat = 0
   private(set) var shadowSize: CGFloat = 0
   private(set) var borderWidth: CGFloat = 0
@@ -226,6 +227,7 @@ final class SquirrelTheme {
     alpha ?= config.getDouble("style/alpha").map { min(1, max(0, $0)) }
     cornerRadius ?= config.getDouble("style/corner_radius")
     hilitedCornerRadius ?= config.getDouble("style/hilited_corner_radius")
+    hilitedCandidateInset ?= config.getDouble("style/hilited_candidate_inset").map { max(0, $0) }
     surroundingExtraExpansion ?= config.getDouble("style/surrounding_extra_expansion")
     borderHeight ?= config.getDouble("style/border_height")
     borderWidth ?= config.getDouble("style/border_width")
@@ -290,6 +292,7 @@ final class SquirrelTheme {
         alpha ?= config.getDouble("\(prefix)/alpha").map { max(0, min(1, $0)) }
         cornerRadius ?= config.getDouble("\(prefix)/corner_radius")
         hilitedCornerRadius ?= config.getDouble("\(prefix)/hilited_corner_radius")
+        hilitedCandidateInset ?= config.getDouble("\(prefix)/hilited_candidate_inset").map { max(0, $0) }
         surroundingExtraExpansion ?= config.getDouble("\(prefix)/surrounding_extra_expansion")
         borderHeight ?= config.getDouble("\(prefix)/border_height")
         borderWidth ?= config.getDouble("\(prefix)/border_width")

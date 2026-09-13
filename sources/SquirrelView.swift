@@ -679,10 +679,11 @@ private extension SquirrelView {
     innerBox.origin.y += halfLinespace
 
     var outerBox = backgroundRect
-    outerBox.size.height -= preeditRect.size.height + max(0, theme.hilitedCornerRadius + theme.borderLineWidth) - 2 * extraExpansion
-    outerBox.size.width -= max(0, theme.hilitedCornerRadius + theme.borderLineWidth)  - 2 * extraExpansion
-    outerBox.origin.x += max(0.0, theme.hilitedCornerRadius + theme.borderLineWidth) / 2.0 - extraExpansion
-    outerBox.origin.y += (preeditAtBottom ? 0 : preeditRect.size.height) + max(0, theme.hilitedCornerRadius + theme.borderLineWidth) / 2 - extraExpansion
+    let highlightInset = max(0, theme.hilitedCandidateInset)
+    outerBox.size.height -= preeditRect.size.height + highlightInset - 2 * extraExpansion
+    outerBox.size.width -= highlightInset - 2 * extraExpansion
+    outerBox.origin.x += highlightInset / 2.0 - extraExpansion
+    outerBox.origin.y += (preeditAtBottom ? 0 : preeditRect.size.height) + highlightInset / 2 - extraExpansion
 
     let effectiveRadius = max(0, theme.hilitedCornerRadius + 2 * extraExpansion / theme.hilitedCornerRadius * max(0, theme.cornerRadius - theme.hilitedCornerRadius))
 
@@ -752,10 +753,11 @@ private extension SquirrelView {
 
   func carveInset(rect: NSRect) -> NSRect {
     var newRect = rect
-    newRect.size.height -= (currentTheme.hilitedCornerRadius + currentTheme.borderWidth) * 2
-    newRect.size.width -= (currentTheme.hilitedCornerRadius + currentTheme.borderWidth) * 2
-    newRect.origin.x += currentTheme.hilitedCornerRadius + currentTheme.borderWidth
-    newRect.origin.y += currentTheme.hilitedCornerRadius + currentTheme.borderWidth
+    let inset = max(0, currentTheme.hilitedCandidateInset + currentTheme.borderWidth)
+    newRect.size.height -= inset * 2
+    newRect.size.width -= inset * 2
+    newRect.origin.x += inset
+    newRect.origin.y += inset
     return newRect
   }
 
