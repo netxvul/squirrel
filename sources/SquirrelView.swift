@@ -40,6 +40,11 @@ final class SquirrelView: NSView {
   var isGlassBackground = false
   var separatorWidth: CGFloat = 0
   var shape = CAShapeLayer()
+  // Keep the presentation tree attached while the candidate geometry changes.
+  // Replacing the view's complete sublayer tree makes a window-level glass
+  // resize much more visible, especially when the panel is below the caret.
+  private let panelLayer = CAShapeLayer()
+  private let pagingContainer = CALayer()
   private var downPath: CGPath?
   private var upPath: CGPath?
 
@@ -69,6 +74,8 @@ final class SquirrelView: NSView {
     textContainer.lineFragmentPadding = 0
     self.wantsLayer = true
     self.layer?.masksToBounds = true
+    self.layer?.addSublayer(panelLayer)
+    self.layer?.addSublayer(pagingContainer)
   }
   required init?(coder: NSCoder) {
     fatalError("init(coder:) has not been implemented")
@@ -229,7 +236,6 @@ final class SquirrelView: NSView {
       backgroundPath = drawSmoothLines(rectVertex(of: backgroundRect), straightCorner: Set(), alpha: 0.3 * theme.cornerRadius, beta: 1.4 * theme.cornerRadius)
     }
 
-    self.layer?.sublayers = nil
     let backPath = backgroundPath?.mutableCopy()
     if let path = preeditPath {
       backPath?.addPath(path)
@@ -242,11 +248,14 @@ final class SquirrelView: NSView {
         backPath?.addPath(path)
       }
     }
-    let panelLayer = shapeFromPath(path: backPath)
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    panelLayer.sublayers = nil
+    panelLayer.path = backPath
+    panelLayer.fillRule = .evenOdd
     panelLayer.fillColor = isGlassBackground ? nil : theme.backgroundColor.cgColor
     let panelLayerMask = shapeFromPath(path: backgroundPath)
     panelLayer.mask = panelLayerMask
-    self.layer?.addSublayer(panelLayer)
 
     if let color = theme.preeditBackgroundColor, let path = preeditPath {
       let layer = shapeFromPath(path: path)
@@ -301,9 +310,7 @@ final class SquirrelView: NSView {
     panelPath.addPath(backgroundPath!, transform: panelLayer.affineTransform().scaledBy(x: 1, y: -1).translatedBy(x: 0, y: -self.bounds.height))
 
     let (pagingLayer, downPath, upPath) = pagingLayer(theme: theme, preeditRect: preeditRect)
-    if let sublayers = pagingLayer.sublayers, !sublayers.isEmpty {
-      self.layer?.addSublayer(pagingLayer)
-    }
+    pagingContainer.sublayers = pagingLayer.sublayers
     let flipTransform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: -self.bounds.height)
     if let downPath {
       panelPath.addPath(downPath, transform: flipTransform)
@@ -315,6 +322,7 @@ final class SquirrelView: NSView {
     }
 
     shape.path = panelPath
+    CATransaction.commit()
   }
 
   func click(at clickPoint: NSPoint) -> (Int?, Int?, Bool?) {

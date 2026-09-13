@@ -562,6 +562,16 @@ private extension SquirrelPanel {
           naturalPanelSize.width = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
         }
 
+        // TextKit 2 can report fractional line bounds that differ by a small
+        // amount after each marked-text update. Those fractions still cause a
+        // whole-window Liquid Glass panel to resize. Snap only stacked
+        // composition panels to the backing scale; a real row addition or
+        // removal remains a real size change.
+        if usesWindowGlass && !linear && !vertical && !showingStatus {
+          let scale = max(backingScaleFactor, 1)
+          naturalPanelSize.height = ceil(naturalPanelSize.height * scale) / scale
+        }
+
         panelRect.size = naturalPanelSize
         if vertical {
           if position.midY / screenRect.height >= 0.5 {
