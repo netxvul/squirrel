@@ -404,6 +404,21 @@ private extension SquirrelInputController {
   }
 
   func processKey(_ rimeKeycode: UInt32, modifiers rimeModifiers: UInt32) -> Bool {
+    let navigationKeycode: UInt32
+    if let panel = NSApp.squirrelAppDelegate.panel,
+       panel.reversesVerticalCandidateNavigation {
+      switch rimeKeycode {
+      case UInt32(XK_Up):
+        navigationKeycode = UInt32(XK_Down)
+      case UInt32(XK_Down):
+        navigationKeycode = UInt32(XK_Up)
+      default:
+        navigationKeycode = rimeKeycode
+      }
+    } else {
+      navigationKeycode = rimeKeycode
+    }
+
     if let panel = NSApp.squirrelAppDelegate.panel {
       if panel.linear != rimeAPI.get_option(session, "_linear") {
         rimeAPI.set_option(session, "_linear", panel.linear)
@@ -413,7 +428,7 @@ private extension SquirrelInputController {
       }
     }
 
-    let handled = rimeAPI.process_key(session, Int32(rimeKeycode), Int32(rimeModifiers))
+    let handled = rimeAPI.process_key(session, Int32(navigationKeycode), Int32(rimeModifiers))
 
     if !handled {
       let isVimBackInCommandMode = rimeKeycode == XK_Escape || ((rimeModifiers & kControlMask.rawValue != 0) && (rimeKeycode == XK_c || rimeKeycode == XK_C || rimeKeycode == XK_bracketleft))

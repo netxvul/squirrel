@@ -117,6 +117,13 @@ final class SquirrelPanel: NSPanel {
   var inlineCandidate: Bool {
     view.currentTheme.inlineCandidate
   }
+  // When the panel is above the caret, stacked candidates are rendered in
+  // reverse order so candidate 1 stays closest to the caret. Rime still
+  // receives logical candidate navigation, so the vertical keys must be
+  // swapped to preserve their on-screen direction.
+  var reversesVerticalCandidateNavigation: Bool {
+    candidateOrderReversed && !linear && !vertical
+  }
 
   private func logicalCandidateIndex(forDisplayIndex displayIndex: Int) -> Int? {
     guard displayIndex >= 0 && displayIndex < candidates.count else { return nil }
