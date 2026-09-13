@@ -40,6 +40,12 @@ final class SquirrelPanel: NSPanel {
   private var page: Int = 0
   private var lastPage: Bool = true
   private var pagingUp: Bool?
+  private enum VisibilityState {
+    case hidden, showing, visible, hiding
+  }
+  private var visibilityState: VisibilityState = .hidden
+  private var visibilityAnimationID: UInt = 0
+  private var lastPanelAboveCaret = false
   // Whether the previous show() presented a status message rather than a
   // composition. Transitions between the two content modes must swap
   // instantly and must not share the memorized width.
@@ -88,6 +94,7 @@ final class SquirrelPanel: NSPanel {
     view.isGlassBackground = useWindowGlass
     back.wantsLayer = true
     back.layer?.mask = view.shape
+    innerView.wantsLayer = true
     innerView.addSubview(back)
     innerView.addSubview(view)
     innerView.addSubview(view.textView)
@@ -224,10 +231,80 @@ final class SquirrelPanel: NSPanel {
   func hide() {
     statusTimer?.invalidate()
     statusTimer = nil
-    orderOut(nil)
     maxHeight = 0
     candidateOrderReversed = false
     pressedCandidateDisplayIndex = nil
+
+    guard isVisible else {
+      visibilityState = .hidden
+      return
+    }
+    animateVisibility(visible: false, panelAboveCaret: lastPanelAboveCaret)
+  }
+
+  private func animateVisibility(visible: Bool, panelAboveCaret: Bool) {
+    guard let layer = innerView.layer else {
+      if !visible {
+        orderOut(nil)
+        visibilityState = .hidden
+      }
+      return
+    }
+
+    visibilityAnimationID &+= 1
+    let animationID = visibilityAnimationID
+
+    // Retarget from the presentation state so a show/hide reversal never
+    // jumps back to a stale endpoint.
+    let currentOpacity = layer.presentation()?.opacity ?? layer.opacity
+    let currentTransform = layer.presentation()?.transform ?? layer.transform
+    layer.removeAllAnimations()
+
+    let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    let targetOpacity: Float = visible ? 1 : 0
+    let targetTransform = visible
+      ? CATransform3DIdentity
+      : CATransform3DMakeTranslation(0, panelAboveCaret ? -4 : 4, 0)
+
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    layer.opacity = targetOpacity
+    layer.transform = targetTransform
+    if reduceMotion {
+      CATransaction.commit()
+      visibilityState = visible ? .visible : .hidden
+      if !visible {
+        orderOut(nil)
+      }
+      return
+    }
+
+    visibilityState = visible ? .showing : .hiding
+    CATransaction.setCompletionBlock { [weak self] in
+      guard let self, self.visibilityAnimationID == animationID else { return }
+      self.visibilityState = visible ? .visible : .hidden
+      if !visible {
+        self.orderOut(nil)
+      }
+    }
+    let duration = visible ? 0.14 : 0.1
+    let timingFunction = CAMediaTimingFunction(name: .easeOut)
+
+    let opacityAnimation = CABasicAnimation(keyPath: "opacity")
+    opacityAnimation.fromValue = currentOpacity
+    opacityAnimation.toValue = targetOpacity
+    opacityAnimation.duration = duration
+    opacityAnimation.timingFunction = timingFunction
+
+    let transformAnimation = CABasicAnimation(keyPath: "transform")
+    transformAnimation.fromValue = NSValue(caTransform3D: currentTransform)
+    transformAnimation.toValue = NSValue(caTransform3D: targetTransform)
+    transformAnimation.duration = duration
+    transformAnimation.timingFunction = timingFunction
+
+    layer.add(opacityAnimation, forKey: "squirrel.visibility.opacity")
+    layer.add(transformAnimation, forKey: "squirrel.visibility.transform")
+    CATransaction.commit()
   }
 
   // swiftlint:disable:next cyclomatic_complexity function_parameter_count
@@ -615,6 +692,7 @@ private extension SquirrelPanel {
         panelIsAboveCaret = panelRect.midY > position.midY
       }
       panelAboveCaret = panelIsAboveCaret
+      lastPanelAboveCaret = panelIsAboveCaret
       let wantsReversedCandidates = !candidates.isEmpty
         && !linear
         && !vertical
@@ -750,6 +828,24 @@ private extension SquirrelPanel {
     NSAnimationContext.endGrouping()
 
     invalidateShadow()
+    let needsPresentationAnimation = !wasVisible || visibilityState == .hiding
+    if !wasVisible {
+      // The window is ordered in with its final geometry; only the content
+      // layer starts offset and transparent, so Glass never animates a frame
+      // resize during the appearance transition.
+      let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+      if reduceMotion {
+        innerView.layer?.removeAllAnimations()
+        innerView.layer?.opacity = 1
+        innerView.layer?.transform = CATransform3DIdentity
+        visibilityState = .visible
+      } else {
+        innerView.layer?.removeAllAnimations()
+        innerView.layer?.opacity = 0
+        innerView.layer?.transform = CATransform3DMakeTranslation(0, panelAboveCaret ? -4 : 4, 0)
+        visibilityState = .hidden
+      }
+    }
     if !usesWindowGlass || !wasVisible {
       orderFront(nil)
     }
@@ -757,6 +853,9 @@ private extension SquirrelPanel {
       // The glass backing view exists only after the window is ordered in;
       // the full refresh is needed just once per appearance on screen.
       applyActiveGlassAppearance()
+    }
+    if needsPresentationAnimation && (!NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || visibilityState == .hiding) {
+      animateVisibility(visible: true, panelAboveCaret: panelAboveCaret)
     }
     lastShowWasStatus = showingStatus
     // voila!
