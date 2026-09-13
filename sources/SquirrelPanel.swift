@@ -402,12 +402,56 @@ final class SquirrelPanel: NSPanel {
 private extension SquirrelPanel {
   func applyGlassConfiguration(theme: SquirrelTheme) {
     view.isGlassBackground = usesWindowGlass || (usesViewGlass && theme.translucency)
+    if usesWindowGlass {
+      applyWindowGlassConfiguration(theme: theme)
+      return
+    }
     guard usesViewGlass, #available(macOS 26.0, *),
           let glassView = glassView as? NSGlassEffectView else { return }
     glassView.cornerRadius = max(0, theme.cornerRadius)
     glassView.tintColor = theme.backgroundColor
     if #available(macOS 27.0, *) {
       glassView.effectIsInteractive = true
+    }
+  }
+
+  // The window-level Liquid Glass backing is created by AppKit only after
+  // the panel is ordered on screen. It is still an NSGlassEffectView, but it
+  // is not exposed as a public NSWindow property. Use the existing guarded
+  // runtime hook to apply the same public Glass properties to that backing.
+  func applyWindowGlassConfiguration(theme: SquirrelTheme) {
+    guard usesWindowGlass, #available(macOS 26.0, *) else { return }
+    let glassSelector = NSSelectorFromString("_glassWindowBackingGlassView")
+    guard responds(to: glassSelector),
+          let glassView = perform(glassSelector)?.takeUnretainedValue() as? NSObject else { return }
+
+    // The backing is an AppKit Glass view on macOS 27, although beta builds
+    // may return a private subclass. Call the public property setters through
+    // their Objective-C entry points so both forms receive the configuration.
+    let radiusSelector = NSSelectorFromString("setCornerRadius:")
+    if glassView.responds(to: radiusSelector) {
+      let setRadius = unsafeBitCast(
+        glassView.method(for: radiusSelector),
+        to: (@convention(c) (NSObject, Selector, CGFloat) -> Void).self)
+      setRadius(glassView, radiusSelector, max(0, theme.cornerRadius))
+    }
+
+    let tintSelector = NSSelectorFromString("setTintColor:")
+    if glassView.responds(to: tintSelector) {
+      let setTint = unsafeBitCast(
+        glassView.method(for: tintSelector),
+        to: (@convention(c) (NSObject, Selector, NSColor?) -> Void).self)
+      setTint(glassView, tintSelector, theme.backgroundColor)
+    }
+
+    if #available(macOS 27.0, *) {
+      let interactiveSelector = NSSelectorFromString("setEffectIsInteractive:")
+      if glassView.responds(to: interactiveSelector) {
+        let setInteractive = unsafeBitCast(
+          glassView.method(for: interactiveSelector),
+          to: (@convention(c) (NSObject, Selector, Bool) -> Void).self)
+        setInteractive(glassView, interactiveSelector, true)
+      }
     }
   }
 
@@ -890,6 +934,11 @@ private extension SquirrelPanel {
     }
     if !usesWindowGlass || !wasVisible {
       orderFront(nil)
+    }
+    if usesWindowGlass {
+      // AppKit creates the window Glass backing during orderFront. Apply the
+      // radius again so the first visible frame uses the configured shape.
+      applyWindowGlassConfiguration(theme: theme)
     }
     if usesWindowGlass && !wasVisible {
       // The glass backing view exists only after the window is ordered in;
