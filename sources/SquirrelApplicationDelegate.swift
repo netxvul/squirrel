@@ -62,7 +62,9 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
     // NSGlassEffectView fallback while keeping liquid_enable on.
     let liquidEnable = config?.getBool("style/liquid_enable") ?? false
     let glassWindow = config?.getBool("style/glass_window") ?? true
-    panel = SquirrelPanel(position: .zero, windowGlass: liquidEnable && glassWindow)
+    panel = SquirrelPanel(position: .zero,
+                          windowGlass: liquidEnable && glassWindow,
+                          viewGlass: liquidEnable && !glassWindow)
     refreshStatusItem()
     addObservers()
   }

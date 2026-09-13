@@ -13,8 +13,10 @@ final class SquirrelPanel: NSPanel {
 
   private let view: SquirrelView
   private let back: NSView
+  private let glassView: NSView?
   private let innerView: NSView
   let usesWindowGlass: Bool
+  let usesViewGlass: Bool
   var inputController: SquirrelInputController?
 
   var position: NSRect
@@ -50,16 +52,19 @@ final class SquirrelPanel: NSPanel {
   // instantly and must not share the memorized width.
   private var lastShowWasStatus = false
 
-  init(position: NSRect, windowGlass: Bool = false) {
+  init(position: NSRect, windowGlass: Bool = false, viewGlass: Bool = false) {
     self.position = position
     self.view = SquirrelView(frame: position)
-    self.back = Self.makeBackgroundView()
+    let backgroundView = Self.makeBackgroundView(useGlass: viewGlass)
+    self.back = backgroundView
+    self.glassView = Self.isGlassEffectView(backgroundView) ? backgroundView : nil
     self.innerView = NSView()
 
     let useWindowGlass = windowGlass
       && ProcessInfo.processInfo.isOperatingSystemAtLeast(
         OperatingSystemVersion(majorVersion: 27, minorVersion: 0, patchVersion: 0))
     self.usesWindowGlass = useWindowGlass
+    self.usesViewGlass = viewGlass && !useWindowGlass && Self.isGlassEffectView(backgroundView)
 
     var styleMask: NSWindow.StyleMask = .nonactivatingPanel
     if useWindowGlass {
@@ -90,7 +95,7 @@ final class SquirrelPanel: NSPanel {
       }
     }
 
-    view.isGlassBackground = useWindowGlass
+    view.isGlassBackground = useWindowGlass || self.usesViewGlass
     back.wantsLayer = true
     back.layer?.mask = view.shape
     innerView.wantsLayer = true
@@ -238,7 +243,22 @@ final class SquirrelPanel: NSPanel {
       visibilityState = .hidden
       return
     }
-    animateVisibility(visible: false)
+    if lastShowWasStatus || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+      setVisibilityImmediately(visible: false)
+    } else {
+      animateVisibility(visible: false)
+    }
+  }
+
+  private func setVisibilityImmediately(visible: Bool) {
+    visibilityAnimationID &+= 1
+    innerView.layer?.removeAllAnimations()
+    innerView.layer?.opacity = visible ? 1 : 0
+    innerView.layer?.transform = CATransform3DIdentity
+    visibilityState = visible ? .visible : .hidden
+    if !visible {
+      orderOut(nil)
+    }
   }
 
   private func animateVisibility(visible: Bool) {
@@ -338,6 +358,7 @@ final class SquirrelPanel: NSPanel {
     }
 
     let theme = view.currentTheme
+    applyGlassConfiguration(theme: theme)
     currentScreen()
     renderCurrentText(highlighted: index, theme: theme)
     show()
@@ -373,6 +394,17 @@ final class SquirrelPanel: NSPanel {
 }
 
 private extension SquirrelPanel {
+  func applyGlassConfiguration(theme: SquirrelTheme) {
+    view.isGlassBackground = usesWindowGlass || (usesViewGlass && theme.translucency)
+    guard usesViewGlass, #available(macOS 26.0, *),
+          let glassView = glassView as? NSGlassEffectView else { return }
+    glassView.cornerRadius = max(0, theme.cornerRadius)
+    glassView.tintColor = theme.backgroundColor
+    if #available(macOS 27.0, *) {
+      glassView.effectIsInteractive = true
+    }
+  }
+
   func renderCurrentText(highlighted index: Int, theme: SquirrelTheme) {
     let text = NSMutableAttributedString()
     let preeditAtBottom = candidateOrderReversed && !preedit.isEmpty && !candidates.isEmpty
@@ -539,6 +571,7 @@ private extension SquirrelPanel {
     let wasVisible = isVisible
     currentScreen()
     let theme = view.currentTheme
+    applyGlassConfiguration(theme: theme)
     if theme.native || view.darkTheme.available {
       self.appearance = NSApp.effectiveAppearance
     } else {
@@ -826,8 +859,13 @@ private extension SquirrelPanel {
     NSAnimationContext.endGrouping()
 
     invalidateShadow()
-    let needsPresentationAnimation = !wasVisible || visibilityState == .hiding
-    if !wasVisible {
+    let needsPresentationAnimation = !showingStatus && (!wasVisible || visibilityState == .hiding)
+    if showingStatus {
+      // Input-mode and Shift notifications are transient status toasts. They
+      // must appear and disappear immediately, without the candidate panel's
+      // materialization animation.
+      setVisibilityImmediately(visible: true)
+    } else if !wasVisible {
       // The window is ordered in with its final geometry; only the content
       // layer starts offset and transparent, so Glass never animates a frame
       // resize during the appearance transition.
@@ -852,7 +890,7 @@ private extension SquirrelPanel {
       // the full refresh is needed just once per appearance on screen.
       applyActiveGlassAppearance()
     }
-    if needsPresentationAnimation && (!NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || visibilityState == .hiding) {
+    if needsPresentationAnimation {
       animateVisibility(visible: true)
     }
     lastShowWasStatus = showingStatus
@@ -919,12 +957,10 @@ private extension SquirrelPanel {
     }
   }
 
-  static func makeBackgroundView() -> NSView {
-    if #available(macOS 26.0, *) {
+  static func makeBackgroundView(useGlass: Bool) -> NSView {
+    if useGlass, #available(macOS 26.0, *) {
       let glassView = NSGlassEffectView()
       glassView.style = .regular
-      // glassView.translatesAutoresizingMaskIntoConstraints = false
-      // glassView.cornerRadius = 100
       return glassView
     } else {
       let visualEffectView = NSVisualEffectView()
@@ -933,5 +969,12 @@ private extension SquirrelPanel {
       visualEffectView.state = .active
       return visualEffectView
     }
+  }
+
+  static func isGlassEffectView(_ view: NSView) -> Bool {
+    if #available(macOS 26.0, *) {
+      return view is NSGlassEffectView
+    }
+    return false
   }
 }
