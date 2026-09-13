@@ -97,7 +97,13 @@ final class SquirrelPanel: NSPanel {
 
     view.isGlassBackground = useWindowGlass || self.usesViewGlass
     back.wantsLayer = true
-    back.layer?.mask = view.shape
+    // NSGlassEffectView owns its rounded clipping through cornerRadius. A
+    // shared CAShapeLayer mask is used by the legacy backdrop and by hit
+    // testing, but attaching it here can leave the Glass backing clipped to
+    // the mask's pre-layout bounds during the first candidate presentation.
+    if !self.usesViewGlass {
+      back.layer?.mask = view.shape
+    }
     innerView.wantsLayer = true
     innerView.addSubview(back)
     innerView.addSubview(view)
