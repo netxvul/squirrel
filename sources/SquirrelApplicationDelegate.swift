@@ -58,8 +58,11 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
   func applicationWillFinishLaunching(_ notification: Notification) {
     // Enable whole-window Liquid Glass only when it is explicitly enabled;
     // SquirrelPanel keeps the existing fallback on unsupported systems.
+    // style/glass_window (default true) can force the view-level
+    // NSGlassEffectView fallback while keeping liquid_enable on.
     let liquidEnable = config?.getBool("style/liquid_enable") ?? false
-    panel = SquirrelPanel(position: .zero, windowGlass: liquidEnable)
+    let glassWindow = config?.getBool("style/glass_window") ?? true
+    panel = SquirrelPanel(position: .zero, windowGlass: liquidEnable && glassWindow)
     refreshStatusItem()
     addObservers()
   }

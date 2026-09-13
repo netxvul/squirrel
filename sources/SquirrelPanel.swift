@@ -40,6 +40,10 @@ final class SquirrelPanel: NSPanel {
   private var page: Int = 0
   private var lastPage: Bool = true
   private var pagingUp: Bool?
+  // Whether the previous show() presented a status message rather than a
+  // composition. Transitions between the two content modes must swap
+  // instantly and must not share the memorized width.
+  private var lastShowWasStatus = false
 
   init(position: NSRect, windowGlass: Bool = false) {
     self.position = position
@@ -63,6 +67,9 @@ final class SquirrelPanel: NSPanel {
 
     super.init(contentRect: position, styleMask: styleMask, backing: .buffered, defer: true)
     self.level = .init(Int(CGShieldingWindowLevel()))
+    // The candidate panel resizes on almost every keystroke; window-level
+    // implicit animations (including the glass frame morph) must never run.
+    self.animationBehavior = .none
     // Match the glass demo: keep the system window shadow off so it does not
     // appear as a black outline around the non-activating input panel.
     self.hasShadow = false
@@ -445,7 +452,7 @@ private extension SquirrelPanel {
   }
 
   // swiftlint:disable:next cyclomatic_complexity
-  func show(layoutPass: Int = 0) {
+  func show() {
     let wasVisible = isVisible
     currentScreen()
     let theme = view.currentTheme
@@ -458,148 +465,151 @@ private extension SquirrelPanel {
 
     view.textView.textContainerInset = theme.edgeInset
 
-    var textWidth = maxTextWidth()
-    // Measure natural text height before constraining the panel.
-    view.textContainer.size = NSSize(width: textWidth, height: .greatestFiniteMagnitude)
-
-    // Do not let NSTextView shrink the container to the current view width; it can loop or hide text.
-    view.textContainer.widthTracksTextView = false
-    view.textContainer.heightTracksTextView = false
-
-    view.textLayoutManager.ensureLayout(for: view.textLayoutManager.documentRange)
-    view.textView.bounds.origin = .zero
-
-    var contentRect = view.contentRect
-
-    // Compute the largest size possible for a giant panel
     var naturalPanelSize = NSSize.zero
-    if vertical {
-      naturalPanelSize.width = contentRect.height + theme.edgeInset.height * 2
-      naturalPanelSize.height = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
-    } else {
-      naturalPanelSize.width = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
-      naturalPanelSize.height = contentRect.height + theme.edgeInset.height * 2
-    }
-
-    let maxAllowedWidth = screenRect.width * 0.95
-    let maxAllowedHeight = screenRect.height * 0.95
-
-    let requiresFullScreen = naturalPanelSize.width > maxAllowedWidth || naturalPanelSize.height > maxAllowedHeight
-
-    if requiresFullScreen {
-      // Expand line length before fullscreen scaling to avoid wasting screen space on narrow text.
-      let area = contentRect.width * contentRect.height
-      let screenRatio = maxAllowedWidth / maxAllowedHeight
-
-      let optimalTextWidth: CGFloat
-      if vertical {
-        // Width = screen height in vertical mode
-        optimalTextWidth = sqrt(area / screenRatio)
-      } else {
-        optimalTextWidth = sqrt(area * screenRatio)
-      }
-
-      // If there's extra room for text, tighten the layout
-      if optimalTextWidth > textWidth {
-        textWidth = optimalTextWidth
-        view.textContainer.size = NSSize(width: textWidth, height: .greatestFiniteMagnitude)
-        view.textLayoutManager.ensureLayout(for: view.textLayoutManager.documentRange)
-
-        contentRect = view.contentRect
-
-        if vertical {
-          naturalPanelSize.width = contentRect.height + theme.edgeInset.height * 2
-          naturalPanelSize.height = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
-        } else {
-          naturalPanelSize.width = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
-          naturalPanelSize.height = contentRect.height + theme.edgeInset.height * 2
-        }
-      }
-    }
-
     var panelRect = NSRect.zero
+    var requiresFullScreen = false
+    var panelAboveCaret = false
 
-    if requiresFullScreen {
-      let scaleX = maxAllowedWidth / naturalPanelSize.width
-      let scaleY = maxAllowedHeight / naturalPanelSize.height
-      let scale = min(scaleX, scaleY)
-
-      panelRect.size = NSSize(width: naturalPanelSize.width * scale, height: naturalPanelSize.height * scale)
-
-      panelRect.origin = NSPoint(
-        x: screenRect.minX + (screenRect.width - panelRect.width) / 2,
-        y: screenRect.minY + (screenRect.height - panelRect.height) / 2
-      )
-
+    // Status messages (e.g. the Shift ASCII-mode toast) and composition
+    // panels are different content modes: they must not share the memorized
+    // width, and switching between them swaps instantly instead of morphing.
+    let showingStatus = candidates.isEmpty && preedit.isEmpty
+    if showingStatus != lastShowWasStatus {
       maxHeight = 0
-    } else {
-      if theme.memorizeSize && (vertical && position.midY / screenRect.height < 0.5) ||
-          (vertical && position.minX + max(contentRect.width, maxHeight) + theme.edgeInset.width * 2 > screenRect.maxX) {
-        if contentRect.width >= maxHeight {
-          maxHeight = contentRect.width
-        } else {
-          contentRect.size.width = maxHeight
+    }
+
+    // Candidate order can depend on the final side of the caret. Resolve that
+    // state before touching the window so a single input update has only one
+    // visible frame transaction.
+    for layoutPass in 0...1 {
+      var textWidth = maxTextWidth()
+      view.textContainer.size = NSSize(width: textWidth, height: .greatestFiniteMagnitude)
+      view.textContainer.widthTracksTextView = false
+      view.textContainer.heightTracksTextView = false
+      view.textLayoutManager.ensureLayout(for: view.textLayoutManager.documentRange)
+      view.textView.bounds.origin = .zero
+
+      var contentRect = view.contentRect
+      if vertical {
+        naturalPanelSize.width = contentRect.height + theme.edgeInset.height * 2
+        naturalPanelSize.height = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
+      } else {
+        naturalPanelSize.width = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
+        naturalPanelSize.height = contentRect.height + theme.edgeInset.height * 2
+      }
+
+      let maxAllowedWidth = screenRect.width * 0.95
+      let maxAllowedHeight = screenRect.height * 0.95
+      requiresFullScreen = naturalPanelSize.width > maxAllowedWidth || naturalPanelSize.height > maxAllowedHeight
+
+      if requiresFullScreen {
+        let area = contentRect.width * contentRect.height
+        let screenRatio = maxAllowedWidth / maxAllowedHeight
+        let optimalTextWidth = vertical ? sqrt(area / screenRatio) : sqrt(area * screenRatio)
+        if optimalTextWidth > textWidth {
+          textWidth = optimalTextWidth
+          view.textContainer.size = NSSize(width: textWidth, height: .greatestFiniteMagnitude)
+          view.textLayoutManager.ensureLayout(for: view.textLayoutManager.documentRange)
+          contentRect = view.contentRect
           if vertical {
+            naturalPanelSize.width = contentRect.height + theme.edgeInset.height * 2
             naturalPanelSize.height = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
           } else {
             naturalPanelSize.width = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
+            naturalPanelSize.height = contentRect.height + theme.edgeInset.height * 2
           }
         }
       }
 
-      panelRect.size = naturalPanelSize
-
-      if vertical {
-        // Anchor vertical panels on one side of the cursor to avoid jumping while typing.
-        if position.midY / screenRect.height >= 0.5 {
-          panelRect.origin.y = position.minY - SquirrelTheme.offsetHeight - panelRect.height + theme.pagingOffset
-        } else {
-          panelRect.origin.y = position.maxY + SquirrelTheme.offsetHeight
-        }
-        panelRect.origin.x = position.minX - panelRect.width - SquirrelTheme.offsetHeight
-        if view.preeditRange.length > 0, let preeditTextRange = view.convert(range: view.preeditRange) {
-          let preeditRect = view.contentRect(range: preeditTextRange)
-          panelRect.origin.x += preeditRect.height + theme.edgeInset.width
-        }
+      if requiresFullScreen {
+        let scaleX = maxAllowedWidth / naturalPanelSize.width
+        let scaleY = maxAllowedHeight / naturalPanelSize.height
+        let scale = min(scaleX, scaleY)
+        panelRect.size = NSSize(width: naturalPanelSize.width * scale, height: naturalPanelSize.height * scale)
+        panelRect.origin = NSPoint(
+          x: screenRect.minX + (screenRect.width - panelRect.width) / 2,
+          y: screenRect.minY + (screenRect.height - panelRect.height) / 2
+        )
+        maxHeight = 0
       } else {
-        panelRect.origin = NSPoint(x: position.minX - theme.pagingOffset, y: position.minY - SquirrelTheme.offsetHeight - panelRect.height)
+        if theme.memorizeSize && (vertical && position.midY / screenRect.height < 0.5) ||
+            (vertical && position.minX + max(contentRect.width, maxHeight) + theme.edgeInset.width * 2 > screenRect.maxX) {
+          if contentRect.width >= maxHeight {
+            maxHeight = contentRect.width
+          } else {
+            contentRect.size.width = maxHeight
+            if vertical {
+              naturalPanelSize.height = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
+            } else {
+              naturalPanelSize.width = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
+            }
+          }
+        }
+
+        // The whole-window Liquid Glass surface is re-rendered by the window
+        // server on every frame change, racing against the app's content
+        // update. Below the caret the backdrop also repaints on each key, so
+        // width flutter shows up as random flicker. Quantize the width into
+        // coarse buckets, tracked in both directions: the panel follows the
+        // content in real time (growing and shrinking through the animated
+        // morph) while sub-quantum flutter never touches the window frame.
+        // Status toasts keep their natural size: they show once and do not
+        // resize while visible.
+        if usesWindowGlass && theme.memorizeSize && !vertical && !showingStatus {
+          let widthQuantum: CGFloat = 20
+          let quantizedWidth = (contentRect.width / widthQuantum).rounded(.up) * widthQuantum
+          contentRect.size.width = quantizedWidth
+          naturalPanelSize.width = contentRect.width + theme.edgeInset.width * 2 + theme.pagingOffset
+        }
+
+        panelRect.size = naturalPanelSize
+        if vertical {
+          if position.midY / screenRect.height >= 0.5 {
+            panelRect.origin.y = position.minY - SquirrelTheme.offsetHeight - panelRect.height + theme.pagingOffset
+          } else {
+            panelRect.origin.y = position.maxY + SquirrelTheme.offsetHeight
+          }
+          panelRect.origin.x = position.minX - panelRect.width - SquirrelTheme.offsetHeight
+          if view.preeditRange.length > 0, let preeditTextRange = view.convert(range: view.preeditRange) {
+            let preeditRect = view.contentRect(range: preeditTextRange)
+            panelRect.origin.x += preeditRect.height + theme.edgeInset.width
+          }
+        } else {
+          panelRect.origin = NSPoint(x: position.minX - theme.pagingOffset, y: position.minY - SquirrelTheme.offsetHeight - panelRect.height)
+        }
+
+        if panelRect.maxX > screenRect.maxX { panelRect.origin.x = screenRect.maxX - panelRect.width }
+        if panelRect.minX < screenRect.minX { panelRect.origin.x = screenRect.minX }
+        if panelRect.minY < screenRect.minY {
+          if vertical { panelRect.origin.y = screenRect.minY } else { panelRect.origin.y = position.maxY + SquirrelTheme.offsetHeight }
+        }
+        if panelRect.maxY > screenRect.maxY { panelRect.origin.y = screenRect.maxY - panelRect.height }
+        if panelRect.minY < screenRect.minY { panelRect.origin.y = screenRect.minY }
       }
 
-      if panelRect.maxX > screenRect.maxX { panelRect.origin.x = screenRect.maxX - panelRect.width }
-      if panelRect.minX < screenRect.minX { panelRect.origin.x = screenRect.minX }
-      if panelRect.minY < screenRect.minY {
-        if vertical { panelRect.origin.y = screenRect.minY } else { panelRect.origin.y = position.maxY + SquirrelTheme.offsetHeight }
+      let panelIsAboveCaret: Bool
+      if requiresFullScreen {
+        panelIsAboveCaret = false
+      } else if panelRect.minY >= position.maxY {
+        panelIsAboveCaret = true
+      } else if panelRect.maxY <= position.minY {
+        panelIsAboveCaret = false
+      } else {
+        panelIsAboveCaret = panelRect.midY > position.midY
       }
-      if panelRect.maxY > screenRect.maxY { panelRect.origin.y = screenRect.maxY - panelRect.height }
-      if panelRect.minY < screenRect.minY { panelRect.origin.y = screenRect.minY }
+      panelAboveCaret = panelIsAboveCaret
+      let wantsReversedCandidates = !candidates.isEmpty
+        && !linear
+        && !vertical
+        && theme.candidateListReversedAboveCursor
+        && panelIsAboveCaret
+      if wantsReversedCandidates != candidateOrderReversed && layoutPass == 0 {
+        candidateOrderReversed = wantsReversedCandidates
+        renderCurrentText(highlighted: cursorIndex, theme: theme)
+        continue
+      }
+      break
     }
-
-    // In a stacked horizontal panel above the caret, put logical candidate 0
-    // nearest the caret by reversing only the visual order. The panel size is
-    // unchanged, so one additional layout pass is enough after the side is known.
-    let panelIsAboveCaret: Bool
-    if requiresFullScreen {
-      panelIsAboveCaret = false
-    } else if panelRect.minY >= position.maxY {
-      panelIsAboveCaret = true
-    } else if panelRect.maxY <= position.minY {
-      panelIsAboveCaret = false
-    } else {
-      panelIsAboveCaret = panelRect.midY > position.midY
-    }
-    let wantsReversedCandidates = !candidates.isEmpty
-      && !linear
-      && !vertical
-      && theme.candidateListReversedAboveCursor
-      && panelIsAboveCaret
-    if wantsReversedCandidates != candidateOrderReversed && layoutPass == 0 {
-      candidateOrderReversed = wantsReversedCandidates
-      renderCurrentText(highlighted: cursorIndex, theme: theme)
-      show(layoutPass: layoutPass + 1)
-      return
-    }
-
-    self.setFrame(panelRect, display: true)
 
     // The outer content view is managed by NSWindow. Keep natural text
     // coordinates and vertical rotation on the inner content view instead.
@@ -626,6 +636,52 @@ private extension SquirrelPanel {
     textFrame.origin.x += theme.pagingOffset
     view.textView.frame = textFrame
 
+    // All view geometry above is final before the window frame moves.
+    //
+    // Whole-window Liquid Glass is composited by the window server, so a
+    // discrete frame change can never be made fully atomic with the content
+    // update from the app side; a single mistimed tick reads as flicker.
+    // Instead of fighting that race, animate frame changes of the visible
+    // glass panel over a short morph (the same approach Apple's own Tahoe
+    // candidate window and vChewing use); a one-tick offset inside continuous
+    // motion is imperceptible.
+    let frameChanged = frame != panelRect
+    let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    // Morph only between two composition layouts. A status toast replacing a
+    // candidate panel (or vice versa) is new content, not a resize: animating
+    // it would visibly grow the panel out of the toast's small frame.
+    let animateFrame = usesWindowGlass && wasVisible && frameChanged && !reduceMotion
+      && !showingStatus && showingStatus == lastShowWasStatus
+
+    // During the morph the content view must stay glued to the caret-facing
+    // edge. Below the caret that edge is the top, and Cocoa windows anchor at
+    // the bottom-left, so pre-offset the inner view and let autoresizing pull
+    // it to origin zero as the window height settles.
+    if animateFrame && !vertical && !panelAboveCaret {
+      innerView.autoresizingMask = [.minYMargin]
+      innerView.frame.origin.y = frame.height - panelRect.height
+    } else {
+      innerView.autoresizingMask = []
+      innerView.frame.origin.y = 0
+    }
+
+    // If the compositor ever catches one tick of stale layer contents against
+    // new geometry, keep those stale pixels glued to the caret-facing edge
+    // instead of letting the default placement stretch them across the panel
+    // (the classic live-resize "trembling" artifact).
+    if frameChanged {
+      let placement: NSView.LayerContentsPlacement =
+        (!vertical && !panelAboveCaret) ? .topLeft : .bottomLeft
+      for anchored in [contentView, innerView, view, view.textView] {
+        anchored?.layerContentsPlacement = placement
+      }
+    }
+
+    NSAnimationContext.beginGrouping()
+    NSAnimationContext.current.duration = 0
+    NSAnimationContext.current.allowsImplicitAnimation = false
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
     if usesWindowGlass {
       // The window frame supplies the Liquid Glass surface. Keeping the
       // fallback backdrop hidden avoids compositing two glass materials.
@@ -639,15 +695,53 @@ private extension SquirrelPanel {
     } else {
       back.isHidden = true
     }
-
     alphaValue = theme.alpha
+    if usesWindowGlass && wasVisible && frameChanged {
+      // AppKit may re-evaluate the (non-key) panel's appearance around frame
+      // changes. Assert the active glass state *before* the fenced present so
+      // the material renders once, in its final state. Poking the glass after
+      // the present would be a second, unfenced visual update per keystroke.
+      assertActiveGlassState()
+    }
+    CATransaction.commit()
+    // Keep setFrame outside any explicit CATransaction: AppKit sets up its own
+    // geometry/drawing fence inside setFrame(display: true), and a nested
+    // open transaction defers the content commit past that pairing.
+    //
+    // NSAnimationContext.runAnimationGroup is Apple's documented replacement
+    // for NSDisableScreenUpdates "when a stronger than normal need for visual
+    // atomicity is required" (NSGraphics.h deprecation note), so both the
+    // animated and the instant presents go through it.
+    if frameChanged {
+      if animateFrame {
+        NSAnimationContext.runAnimationGroup { context in
+          context.duration = 0.12
+          context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+          context.allowsImplicitAnimation = true
+          animator().setFrame(panelRect, display: true)
+        }
+      } else {
+        NSAnimationContext.runAnimationGroup { context in
+          context.duration = 0
+          context.allowsImplicitAnimation = false
+          setFrame(panelRect, display: true)
+        }
+      }
+    } else if view.needsDisplay {
+      displayIfNeeded()
+    }
+    NSAnimationContext.endGrouping()
+
     invalidateShadow()
     if !usesWindowGlass || !wasVisible {
       orderFront(nil)
     }
     if usesWindowGlass && !wasVisible {
+      // The glass backing view exists only after the window is ordered in;
+      // the full refresh is needed just once per appearance on screen.
       applyActiveGlassAppearance()
     }
+    lastShowWasStatus = showingStatus
     // voila!
   }
 
@@ -673,9 +767,9 @@ private extension SquirrelPanel {
     return NSRange(location: startPos, length: endPos - startPos)
   }
 
-  // Ask macOS to render a non-key input panel with the active Liquid Glass
-  // appearance. These are private selectors used defensively at runtime.
-  private func applyActiveGlassAppearance() {
+  // Idempotent state asserts, cheap enough to run before every fenced
+  // present. These are private selectors used defensively at runtime.
+  private func assertActiveGlassState() {
     let activeSelector = NSSelectorFromString("_setHasActiveAppearance:")
     if responds(to: activeSelector) {
       let method = unsafeBitCast(
@@ -688,6 +782,13 @@ private extension SquirrelPanel {
     if responds(to: acquireSelector) {
       perform(acquireSelector)
     }
+  }
+
+  // Ask macOS to render a non-key input panel with the active Liquid Glass
+  // appearance, forcing the glass backing view to refresh. Heavier than
+  // assertActiveGlassState; used once per appearance on screen.
+  private func applyActiveGlassAppearance() {
+    assertActiveGlassState()
 
     let refreshSelector = NSSelectorFromString("_windowChangedKeyState")
     let glassSelector = NSSelectorFromString("_glassWindowBackingGlassView")
