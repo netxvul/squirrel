@@ -45,7 +45,6 @@ final class SquirrelPanel: NSPanel {
   }
   private var visibilityState: VisibilityState = .hidden
   private var visibilityAnimationID: UInt = 0
-  private var lastPanelAboveCaret = false
   // Whether the previous show() presented a status message rather than a
   // composition. Transitions between the two content modes must swap
   // instantly and must not share the memorized width.
@@ -239,10 +238,10 @@ final class SquirrelPanel: NSPanel {
       visibilityState = .hidden
       return
     }
-    animateVisibility(visible: false, panelAboveCaret: lastPanelAboveCaret)
+    animateVisibility(visible: false)
   }
 
-  private func animateVisibility(visible: Bool, panelAboveCaret: Bool) {
+  private func animateVisibility(visible: Bool) {
     guard let layer = innerView.layer else {
       if !visible {
         orderOut(nil)
@@ -264,7 +263,7 @@ final class SquirrelPanel: NSPanel {
     let targetOpacity: Float = visible ? 1 : 0
     let targetTransform = visible
       ? CATransform3DIdentity
-      : CATransform3DMakeTranslation(0, panelAboveCaret ? -4 : 4, 0)
+      : CATransform3DMakeScale(0.985, 0.985, 1)
 
     CATransaction.begin()
     CATransaction.setDisableActions(true)
@@ -692,7 +691,6 @@ private extension SquirrelPanel {
         panelIsAboveCaret = panelRect.midY > position.midY
       }
       panelAboveCaret = panelIsAboveCaret
-      lastPanelAboveCaret = panelIsAboveCaret
       let wantsReversedCandidates = !candidates.isEmpty
         && !linear
         && !vertical
@@ -842,7 +840,7 @@ private extension SquirrelPanel {
       } else {
         innerView.layer?.removeAllAnimations()
         innerView.layer?.opacity = 0
-        innerView.layer?.transform = CATransform3DMakeTranslation(0, panelAboveCaret ? -4 : 4, 0)
+        innerView.layer?.transform = CATransform3DMakeScale(0.985, 0.985, 1)
         visibilityState = .hidden
       }
     }
@@ -855,7 +853,7 @@ private extension SquirrelPanel {
       applyActiveGlassAppearance()
     }
     if needsPresentationAnimation && (!NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || visibilityState == .hiding) {
-      animateVisibility(visible: true, panelAboveCaret: panelAboveCaret)
+      animateVisibility(visible: true)
     }
     lastShowWasStatus = showingStatus
     // voila!
