@@ -42,11 +42,6 @@ final class SquirrelPanel: NSPanel {
   private var page: Int = 0
   private var lastPage: Bool = true
   private var pagingUp: Bool?
-  private enum VisibilityState {
-    case hidden, showing, visible, hiding
-  }
-  private var visibilityState: VisibilityState = .hidden
-  private var visibilityAnimationID: UInt = 0
   // Whether the previous show() presented a status message rather than a
   // composition. Transitions between the two content modes must swap
   // instantly and must not share the memorized width.
@@ -77,8 +72,9 @@ final class SquirrelPanel: NSPanel {
 
     super.init(contentRect: position, styleMask: styleMask, backing: .buffered, defer: true)
     self.level = .init(Int(CGShieldingWindowLevel()))
-    // The candidate panel resizes on almost every keystroke; window-level
-    // implicit animations (including the glass frame morph) must never run.
+    // The candidate panel resizes on almost every keystroke. AppKit's own
+    // window animations - order-in/out fades and the Liquid Glass frame morph
+    // - must never run.
     self.animationBehavior = .none
     // Match the glass demo: keep the system window shadow off so it does not
     // appear as a black outline around the non-activating input panel.
@@ -245,91 +241,8 @@ final class SquirrelPanel: NSPanel {
     candidateOrderReversed = false
     pressedCandidateDisplayIndex = nil
 
-    guard isVisible else {
-      visibilityState = .hidden
-      return
-    }
-    if lastShowWasStatus || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-      setVisibilityImmediately(visible: false)
-    } else {
-      animateVisibility(visible: false)
-    }
-  }
-
-  private func setVisibilityImmediately(visible: Bool) {
-    visibilityAnimationID &+= 1
-    innerView.layer?.removeAllAnimations()
-    innerView.layer?.opacity = visible ? 1 : 0
-    innerView.layer?.transform = CATransform3DIdentity
-    visibilityState = visible ? .visible : .hidden
-    if !visible {
-      orderOut(nil)
-    }
-  }
-
-  private func animateVisibility(visible: Bool) {
-    guard let layer = innerView.layer else {
-      if !visible {
-        orderOut(nil)
-        visibilityState = .hidden
-      }
-      return
-    }
-
-    visibilityAnimationID &+= 1
-    let animationID = visibilityAnimationID
-
-    // Retarget from the presentation state so a show/hide reversal never
-    // jumps back to a stale endpoint.
-    let currentOpacity = layer.presentation()?.opacity ?? layer.opacity
-    let currentTransform = layer.presentation()?.transform ?? layer.transform
-    layer.removeAllAnimations()
-
-    let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-    let targetOpacity: Float = visible ? 1 : 0
-    let targetTransform = visible
-      ? CATransform3DIdentity
-      : CATransform3DMakeScale(0.985, 0.985, 1)
-
-    CATransaction.begin()
-    CATransaction.setDisableActions(true)
-    layer.opacity = targetOpacity
-    layer.transform = targetTransform
-    if reduceMotion {
-      CATransaction.commit()
-      visibilityState = visible ? .visible : .hidden
-      if !visible {
-        orderOut(nil)
-      }
-      return
-    }
-
-    visibilityState = visible ? .showing : .hiding
-    CATransaction.setCompletionBlock { [weak self] in
-      guard let self, self.visibilityAnimationID == animationID else { return }
-      self.visibilityState = visible ? .visible : .hidden
-      if !visible {
-        self.orderOut(nil)
-      }
-    }
-    let duration = visible ? 0.14 : 0.1
-    let timingFunction = CAMediaTimingFunction(name: .easeOut)
-
-    let opacityAnimation = CABasicAnimation(keyPath: "opacity")
-    opacityAnimation.fromValue = currentOpacity
-    opacityAnimation.toValue = targetOpacity
-    opacityAnimation.duration = duration
-    opacityAnimation.timingFunction = timingFunction
-
-    let transformAnimation = CABasicAnimation(keyPath: "transform")
-    transformAnimation.fromValue = NSValue(caTransform3D: currentTransform)
-    transformAnimation.toValue = NSValue(caTransform3D: targetTransform)
-    transformAnimation.duration = duration
-    transformAnimation.timingFunction = timingFunction
-
-    layer.add(opacityAnimation, forKey: "squirrel.visibility.opacity")
-    layer.add(transformAnimation, forKey: "squirrel.visibility.transform")
-    CATransaction.commit()
+    guard isVisible else { return }
+    orderOut(nil)
   }
 
   // swiftlint:disable:next cyclomatic_complexity function_parameter_count
@@ -643,8 +556,8 @@ private extension SquirrelPanel {
     var panelAboveCaret = false
 
     // Status messages (e.g. the Shift ASCII-mode toast) and composition
-    // panels are different content modes: they must not share the memorized
-    // width, and switching between them swaps instantly instead of morphing.
+    // panels are different content modes, so they must not share the
+    // memorized width.
     let showingStatus = candidates.isEmpty && preedit.isEmpty
     let edgeInset = showingStatus ? statusEdgeInset(for: theme) : theme.edgeInset
     view.panelEdgeInset = showingStatus ? edgeInset : nil
@@ -725,11 +638,10 @@ private extension SquirrelPanel {
         // server on every frame change, racing against the app's content
         // update. Below the caret the backdrop also repaints on each key, so
         // width flutter shows up as random flicker. Quantize the width into
-        // coarse buckets, tracked in both directions: the panel follows the
-        // content in real time (growing and shrinking through the animated
-        // morph) while sub-quantum flutter never touches the window frame.
-        // Status toasts keep their natural size: they show once and do not
-        // resize while visible.
+        // coarse buckets, tracked in both directions: the panel still follows
+        // the content as it grows and shrinks, while sub-quantum flutter never
+        // touches the window frame. Status toasts keep their natural size:
+        // they show once and do not resize while visible.
         if usesWindowGlass && theme.memorizeSize && !vertical && !showingStatus {
           let widthQuantum: CGFloat = 20
           let quantizedWidth = (contentRect.width / widthQuantum).rounded(.up) * widthQuantum
@@ -823,32 +735,17 @@ private extension SquirrelPanel {
 
     // All view geometry above is final before the window frame moves.
     //
-    // Whole-window Liquid Glass is composited by the window server, so a
-    // discrete frame change can never be made fully atomic with the content
-    // update from the app side; a single mistimed tick reads as flicker.
-    // Instead of fighting that race, animate frame changes of the visible
-    // glass panel over a short morph (the same approach Apple's own Tahoe
-    // candidate window and vChewing use); a one-tick offset inside continuous
-    // motion is imperceptible.
+    // The panel is presented without animation. Whole-window Liquid Glass is
+    // composited by the window server, so a frame change can never be made
+    // fully atomic with the content update from the app side - but animating
+    // the frame does not close that gap, it spreads it over every step of the
+    // animation: the window server owns window geometry, so an animated
+    // setFrame has to be re-pushed from the main thread on each step while the
+    // content view's geometry is committed separately. Below the caret, where
+    // the origin moves together with the height, the content then visibly
+    // trails the panel edge for the whole animation. One instant, fenced
+    // present per update is both simpler and steadier.
     let frameChanged = frame != panelRect
-    let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-    // Morph only between two composition layouts. A status toast replacing a
-    // candidate panel (or vice versa) is new content, not a resize: animating
-    // it would visibly grow the panel out of the toast's small frame.
-    let animateFrame = usesWindowGlass && wasVisible && frameChanged && !reduceMotion
-      && !showingStatus && showingStatus == lastShowWasStatus
-
-    // During the morph the content view must stay glued to the caret-facing
-    // edge. Below the caret that edge is the top, and Cocoa windows anchor at
-    // the bottom-left, so pre-offset the inner view and let autoresizing pull
-    // it to origin zero as the window height settles.
-    if animateFrame && !vertical && !panelAboveCaret {
-      innerView.autoresizingMask = [.minYMargin]
-      innerView.frame.origin.y = frame.height - panelRect.height
-    } else {
-      innerView.autoresizingMask = []
-      innerView.frame.origin.y = 0
-    }
 
     // If the compositor ever catches one tick of stale layer contents against
     // new geometry, keep those stale pixels glued to the caret-facing edge
@@ -895,22 +792,13 @@ private extension SquirrelPanel {
     //
     // NSAnimationContext.runAnimationGroup is Apple's documented replacement
     // for NSDisableScreenUpdates "when a stronger than normal need for visual
-    // atomicity is required" (NSGraphics.h deprecation note), so both the
-    // animated and the instant presents go through it.
+    // atomicity is required" (NSGraphics.h deprecation note), so the present
+    // goes through it.
     if frameChanged {
-      if animateFrame {
-        NSAnimationContext.runAnimationGroup { context in
-          context.duration = 0.12
-          context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-          context.allowsImplicitAnimation = true
-          animator().setFrame(panelRect, display: true)
-        }
-      } else {
-        NSAnimationContext.runAnimationGroup { context in
-          context.duration = 0
-          context.allowsImplicitAnimation = false
-          setFrame(panelRect, display: true)
-        }
+      NSAnimationContext.runAnimationGroup { context in
+        context.duration = 0
+        context.allowsImplicitAnimation = false
+        setFrame(panelRect, display: true)
       }
     } else if view.needsDisplay {
       displayIfNeeded()
@@ -918,29 +806,6 @@ private extension SquirrelPanel {
     NSAnimationContext.endGrouping()
 
     invalidateShadow()
-    let needsPresentationAnimation = !showingStatus && (!wasVisible || visibilityState == .hiding)
-    if showingStatus {
-      // Input-mode and Shift notifications are transient status toasts. They
-      // must appear and disappear immediately, without the candidate panel's
-      // materialization animation.
-      setVisibilityImmediately(visible: true)
-    } else if !wasVisible {
-      // The window is ordered in with its final geometry; only the content
-      // layer starts offset and transparent, so Glass never animates a frame
-      // resize during the appearance transition.
-      let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-      if reduceMotion {
-        innerView.layer?.removeAllAnimations()
-        innerView.layer?.opacity = 1
-        innerView.layer?.transform = CATransform3DIdentity
-        visibilityState = .visible
-      } else {
-        innerView.layer?.removeAllAnimations()
-        innerView.layer?.opacity = 0
-        innerView.layer?.transform = CATransform3DMakeScale(0.985, 0.985, 1)
-        visibilityState = .hidden
-      }
-    }
     if !usesWindowGlass || !wasVisible {
       orderFront(nil)
     }
@@ -955,9 +820,6 @@ private extension SquirrelPanel {
       // The glass backing view exists only after the window is ordered in;
       // the full refresh is needed just once per appearance on screen.
       applyActiveGlassAppearance()
-    }
-    if needsPresentationAnimation {
-      animateVisibility(visible: true)
     }
     lastShowWasStatus = showingStatus
     // voila!
