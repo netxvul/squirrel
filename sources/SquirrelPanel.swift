@@ -21,6 +21,7 @@ final class SquirrelPanel: NSPanel {
 
   var position: NSRect
   private var screenRect: NSRect = .zero
+  private var screenScale: CGFloat = 1
   private var maxHeight: CGFloat = 0
 
   private var statusMessage: String = ""
@@ -321,6 +322,15 @@ private extension SquirrelPanel {
     return NSSize(width: max(horizontal, 6), height: max(vertical, 4))
   }
 
+  // Snap a length or coordinate to the device-pixel grid of the screen the
+  // panel is shown on. The whole-window Liquid Glass rim is re-rasterized by
+  // the window server on every frame change, so an edge that sits between two
+  // device pixels moves by a whole pixel as soon as the rounding tips over.
+  func backingAligned(_ value: CGFloat, rule: FloatingPointRoundingRule = .toNearestOrAwayFromZero) -> CGFloat {
+    let scale = max(screenScale, 1)
+    return (value * scale).rounded(rule) / scale
+  }
+
   func applyGlassConfiguration(theme: SquirrelTheme) {
     view.isGlassBackground = usesWindowGlass || (usesViewGlass && theme.translucency)
     if usesWindowGlass {
@@ -517,9 +527,11 @@ private extension SquirrelPanel {
   func currentScreen() {
     if let screen = NSScreen.main {
       screenRect = screen.frame
+      screenScale = screen.backingScaleFactor
     }
     for screen in NSScreen.screens where screen.frame.contains(position.origin) {
       screenRect = screen.frame
+      screenScale = screen.backingScaleFactor
       break
     }
   }
@@ -651,20 +663,22 @@ private extension SquirrelPanel {
 
         // TextKit 2 can report fractional line bounds that differ by a small
         // amount after each marked-text update. Those fractions still cause a
-        // whole-window Liquid Glass panel to resize. Snap only stacked
-        // composition panels to the backing scale; a real row addition or
-        // removal remains a real size change.
-        if usesWindowGlass && !linear && !vertical && !showingStatus {
-          let scale = max(backingScaleFactor, 1)
-          naturalPanelSize.height = ceil(naturalPanelSize.height * scale) / scale
+        // whole-window Liquid Glass panel to resize, and a fractional size also
+        // leaves the panel's edges between device pixels. Snap the panel to the
+        // backing grid so the caret-facing edge derived from it below can stay
+        // pixel-exact across resizes; a real row addition or removal remains a
+        // real size change.
+        if usesWindowGlass {
+          naturalPanelSize.width = backingAligned(naturalPanelSize.width, rule: .up)
+          naturalPanelSize.height = backingAligned(naturalPanelSize.height, rule: .up)
         }
 
         panelRect.size = naturalPanelSize
         if vertical {
           if position.midY / screenRect.height >= 0.5 {
-            panelRect.origin.y = position.minY - SquirrelTheme.offsetHeight - panelRect.height + theme.pagingOffset
+            panelRect.origin.y = backingAligned(position.minY - SquirrelTheme.offsetHeight - panelRect.height + theme.pagingOffset)
           } else {
-            panelRect.origin.y = position.maxY + SquirrelTheme.offsetHeight
+            panelRect.origin.y = backingAligned(position.maxY + SquirrelTheme.offsetHeight)
           }
           panelRect.origin.x = position.minX - panelRect.width - SquirrelTheme.offsetHeight
           if view.preeditRange.length > 0, let preeditTextRange = view.convert(range: view.preeditRange) {
@@ -672,16 +686,29 @@ private extension SquirrelPanel {
             panelRect.origin.x += preeditRect.height + edgeInset.width
           }
         } else {
-          panelRect.origin = NSPoint(x: position.minX - theme.pagingOffset, y: position.minY - SquirrelTheme.offsetHeight - panelRect.height)
+          // Below the caret the top edge is the anchor, but Cocoa positions
+          // windows by their bottom-left corner, so the origin has to absorb
+          // every height change. Put the anchor itself on the device-pixel grid
+          // and derive the origin from it: combined with the grid-aligned
+          // height above, the rendered top edge then stays put across resizes
+          // instead of shifting a pixel whenever a fractional origin and a
+          // fractional height happen to round in opposite directions.
+          let topEdge = backingAligned(position.minY - SquirrelTheme.offsetHeight)
+          panelRect.origin = NSPoint(x: position.minX - theme.pagingOffset, y: topEdge - panelRect.height)
         }
 
         if panelRect.maxX > screenRect.maxX { panelRect.origin.x = screenRect.maxX - panelRect.width }
         if panelRect.minX < screenRect.minX { panelRect.origin.x = screenRect.minX }
         if panelRect.minY < screenRect.minY {
-          if vertical { panelRect.origin.y = screenRect.minY } else { panelRect.origin.y = position.maxY + SquirrelTheme.offsetHeight }
+          // Flipped above the caret: the bottom edge becomes the anchor, so the
+          // origin no longer depends on the height at all.
+          if vertical { panelRect.origin.y = screenRect.minY } else { panelRect.origin.y = backingAligned(position.maxY + SquirrelTheme.offsetHeight) }
         }
         if panelRect.maxY > screenRect.maxY { panelRect.origin.y = screenRect.maxY - panelRect.height }
         if panelRect.minY < screenRect.minY { panelRect.origin.y = screenRect.minY }
+        // The caret's reported x is fractional and advances as the user types;
+        // keep the vertical rims on the grid for the same reason as above.
+        panelRect.origin.x = backingAligned(panelRect.origin.x)
       }
 
       let panelIsAboveCaret: Bool
