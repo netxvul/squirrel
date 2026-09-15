@@ -50,6 +50,9 @@ style:
 
   corner_radius: 7
   hilited_corner_radius: 0
+  # Text/content padding is independent from the panel and highlight radii.
+  content_horizontal_inset: 5
+  content_vertical_inset: 5
   # Inset of the highlighted candidate from the panel edge; independent from hilited_corner_radius
   hilited_candidate_inset: 1
   border_height: -2

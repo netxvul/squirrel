@@ -53,6 +53,11 @@ final class SquirrelTheme {
 
   private(set) var cornerRadius: CGFloat = 0
   private(set) var hilitedCornerRadius: CGFloat = 0
+  // Content padding is deliberately independent from either visual radius.
+  // The old implementation reused cornerRadius for edgeInset, which made a
+  // large rounded panel grow vertically even when the text did not change.
+  private(set) var contentHorizontalInset: CGFloat = 5
+  private(set) var contentVerticalInset: CGFloat = 5
   private(set) var hilitedCandidateInset: CGFloat = 0
   private(set) var surroundingExtraExpansion: CGFloat = 0
   private(set) var shadowSize: CGFloat = 0
@@ -166,7 +171,7 @@ final class SquirrelTheme {
   private(set) lazy var firstParagraphStyle: NSParagraphStyle = {
     let style = NSParagraphStyle.default.mutableCopy() as! NSMutableParagraphStyle
     style.paragraphSpacing = linespace / 2
-    style.paragraphSpacingBefore = preeditLinespace / 2 + hilitedCornerRadius / 2
+    style.paragraphSpacingBefore = preeditLinespace / 2 + contentVerticalPadding / 2
     return style as NSParagraphStyle
   }()
   private(set) lazy var paragraphStyle: NSParagraphStyle = {
@@ -177,14 +182,18 @@ final class SquirrelTheme {
   }()
   private(set) lazy var preeditParagraphStyle: NSParagraphStyle = {
     let style = NSMutableParagraphStyle.default.mutableCopy() as! NSMutableParagraphStyle
-    style.paragraphSpacing = preeditLinespace / 2 + hilitedCornerRadius / 2
+    style.paragraphSpacing = preeditLinespace / 2 + contentVerticalPadding / 2
     style.lineSpacing = linespace
     return style as NSParagraphStyle
   }()
   private(set) lazy var edgeInset: NSSize = if self.vertical {
-    NSSize(width: borderHeight + cornerRadius, height: borderWidth + cornerRadius)
+    NSSize(width: contentVerticalInset, height: contentHorizontalInset)
   } else {
-    NSSize(width: borderWidth + cornerRadius, height: borderHeight + cornerRadius)
+    NSSize(width: contentHorizontalInset, height: contentVerticalInset)
+  }
+  // Paragraph styles use the inset along the view's current vertical axis.
+  var contentVerticalPadding: CGFloat {
+    vertical ? contentHorizontalInset : contentVerticalInset
   }
   private(set) lazy var borderLineWidth: CGFloat = min(borderHeight, borderWidth)
   private(set) var candidateFormat: String {
@@ -227,6 +236,8 @@ final class SquirrelTheme {
     alpha ?= config.getDouble("style/alpha").map { min(1, max(0, $0)) }
     cornerRadius ?= config.getDouble("style/corner_radius")
     hilitedCornerRadius ?= config.getDouble("style/hilited_corner_radius")
+    contentHorizontalInset ?= config.getDouble("style/content_horizontal_inset").map { max(0, $0) }
+    contentVerticalInset ?= config.getDouble("style/content_vertical_inset").map { max(0, $0) }
     hilitedCandidateInset ?= config.getDouble("style/hilited_candidate_inset").map { max(0, $0) }
     surroundingExtraExpansion ?= config.getDouble("style/surrounding_extra_expansion")
     borderHeight ?= config.getDouble("style/border_height")
@@ -292,6 +303,8 @@ final class SquirrelTheme {
         alpha ?= config.getDouble("\(prefix)/alpha").map { max(0, min(1, $0)) }
         cornerRadius ?= config.getDouble("\(prefix)/corner_radius")
         hilitedCornerRadius ?= config.getDouble("\(prefix)/hilited_corner_radius")
+        contentHorizontalInset ?= config.getDouble("\(prefix)/content_horizontal_inset").map { max(0, $0) }
+        contentVerticalInset ?= config.getDouble("\(prefix)/content_vertical_inset").map { max(0, $0) }
         hilitedCandidateInset ?= config.getDouble("\(prefix)/hilited_candidate_inset").map { max(0, $0) }
         surroundingExtraExpansion ?= config.getDouble("\(prefix)/surrounding_extra_expansion")
         borderHeight ?= config.getDouble("\(prefix)/border_height")

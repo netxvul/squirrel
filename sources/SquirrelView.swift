@@ -160,9 +160,9 @@ final class SquirrelView: NSView {
     if preeditRange.length > 0, let preeditTextRange = convert(range: preeditRange) {
       preeditRect = contentRect(range: preeditTextRange)
       preeditRect.size.width = backgroundRect.size.width
-      preeditRect.size.height += edgeInset.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2
+      preeditRect.size.height += edgeInset.height + theme.preeditLinespace / 2 + edgeInset.height / 2
       if candidateRanges.count == 0 {
-        preeditRect.size.height += edgeInset.height - theme.preeditLinespace / 2 - theme.hilitedCornerRadius / 2
+        preeditRect.size.height += edgeInset.height - theme.preeditLinespace / 2 - edgeInset.height / 2
       }
       if preeditAtBottom {
         preeditRect.origin.y = backgroundRect.maxY - preeditRect.height
@@ -207,7 +207,7 @@ final class SquirrelView: NSView {
       if candidateRanges.count == 0 {
         innerBox.size.height -= (edgeInset.height + 1) * 2
       } else {
-        innerBox.size.height -= edgeInset.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 2
+        innerBox.size.height -= edgeInset.height + theme.preeditLinespace / 2 + edgeInset.height / 2 + 2
       }
       var outerBox = preeditRect
       outerBox.size.height -= max(0, theme.hilitedCornerRadius + theme.borderLineWidth)
@@ -221,11 +221,21 @@ final class SquirrelView: NSView {
       containingRect = carveInset(rect: preeditRect)
       highlightedPoints = expand(vertex: highlightedPoints, innerBorder: innerBox, outerBorder: outerBox)
       rightCorners = removeCorner(highlightedPoints: highlightedPoints, rightCorners: rightCorners, containingRect: containingRect)
-      highlightedPreeditPath = drawSmoothLines(highlightedPoints, straightCorner: rightCorners, alpha: 0.3 * theme.hilitedCornerRadius, beta: 1.4 * theme.hilitedCornerRadius)?.mutableCopy()
+      let highlightedPreeditBounds = boundingRect(of: highlightedPoints)
+      let highlightedPreeditRadius = max(0, min(theme.hilitedCornerRadius,
+                                                min(highlightedPreeditBounds.width, highlightedPreeditBounds.height) / 2))
+      highlightedPreeditPath = drawSmoothLines(highlightedPoints, straightCorner: rightCorners,
+                                               alpha: 0.55228475 * highlightedPreeditRadius,
+                                               beta: highlightedPreeditRadius)?.mutableCopy()
       if highlightedPoints2.count > 0 {
         highlightedPoints2 = expand(vertex: highlightedPoints2, innerBorder: innerBox, outerBorder: outerBox)
         rightCorners2 = removeCorner(highlightedPoints: highlightedPoints2, rightCorners: rightCorners2, containingRect: containingRect)
-        let highlightedPreeditPath2 = drawSmoothLines(highlightedPoints2, straightCorner: rightCorners2, alpha: 0.3 * theme.hilitedCornerRadius, beta: 1.4 * theme.hilitedCornerRadius)
+        let highlightedPreeditBounds2 = boundingRect(of: highlightedPoints2)
+        let highlightedPreeditRadius2 = max(0, min(theme.hilitedCornerRadius,
+                                                   min(highlightedPreeditBounds2.width, highlightedPreeditBounds2.height) / 2))
+        let highlightedPreeditPath2 = drawSmoothLines(highlightedPoints2, straightCorner: rightCorners2,
+                                                      alpha: 0.55228475 * highlightedPreeditRadius2,
+                                                      beta: highlightedPreeditRadius2)
         if let highlightedPreeditPath2 = highlightedPreeditPath2 {
           highlightedPreeditPath?.addPath(highlightedPreeditPath2)
         }
@@ -558,6 +568,23 @@ private extension SquirrelView {
     return newVertex
   }
 
+  // Expand only the horizontal edges of a stacked candidate highlight.
+  // Vertical expansion based on `innerBorder` would turn the first/last row
+  // into a taller shape. Clamp only if a row actually leaves the candidate
+  // region itself.
+  func expandStacked(vertex: [NSPoint], innerBorder: NSRect, outerBorder: NSRect) -> [NSPoint] {
+    vertex.map { point in
+      var result = point
+      if result.x < innerBorder.minX {
+        result.x = outerBorder.minX
+      } else if result.x > innerBorder.maxX {
+        result.x = outerBorder.maxX
+      }
+      result.y = min(max(result.y, outerBorder.minY), outerBorder.maxY)
+      return result
+    }
+  }
+
   func direction(diff: CGPoint) -> CGPoint {
     if diff.y == 0 && diff.x > 0 {
       return NSPoint(x: 0, y: 1)
@@ -577,6 +604,34 @@ private extension SquirrelView {
     layer.path = path
     layer.fillRule = .evenOdd
     return layer
+  }
+
+  // Build a geometric rounded rectangle for a single candidate row. The
+  // configured value is a request, not a promise: a radius cannot exceed
+  // half of either dimension of the actual highlight rectangle.
+  func roundedRectPath(_ rect: NSRect, radius requestedRadius: CGFloat) -> CGPath? {
+    guard rect.width > 0, rect.height > 0,
+          rect.width.isFinite, rect.height.isFinite,
+          requestedRadius.isFinite else {
+      return nil
+    }
+    let radius = min(max(0, requestedRadius), min(rect.width, rect.height) / 2)
+    return CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
+  }
+
+  func boundingRect(of points: [NSPoint]) -> NSRect {
+    guard let first = points.first else { return .zero }
+    var minX = first.x
+    var maxX = first.x
+    var minY = first.y
+    var maxY = first.y
+    for point in points.dropFirst() {
+      minX = min(minX, point.x)
+      maxX = max(maxX, point.x)
+      minY = min(minY, point.y)
+      maxY = max(maxY, point.y)
+    }
+    return NSRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
   }
 
   // Assumes clockwise iteration
@@ -675,10 +730,10 @@ private extension SquirrelView {
       // spacing and bottom inset below them instead of carving from the top.
       innerBox.origin.y += edgeInset.height + 1
       innerBox.size.height -= edgeInset.height + preeditRect.size.height
-        + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 2
+        + theme.preeditLinespace / 2 + edgeInset.height / 2 + 2
     } else {
-      innerBox.origin.y += preeditRect.size.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 1
-      innerBox.size.height -= edgeInset.height + preeditRect.size.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 2
+      innerBox.origin.y += preeditRect.size.height + theme.preeditLinespace / 2 + edgeInset.height / 2 + 1
+      innerBox.size.height -= edgeInset.height + preeditRect.size.height + theme.preeditLinespace / 2 + edgeInset.height / 2 + 2
     }
     innerBox.size.height -= theme.linespace
     innerBox.origin.y += halfLinespace
@@ -690,7 +745,14 @@ private extension SquirrelView {
     outerBox.origin.x += highlightInset / 2.0 - extraExpansion
     outerBox.origin.y += (preeditAtBottom ? 0 : preeditRect.size.height) + highlightInset / 2 - extraExpansion
 
-    let effectiveRadius = max(0, theme.hilitedCornerRadius + 2 * extraExpansion / theme.hilitedCornerRadius * max(0, theme.cornerRadius - theme.hilitedCornerRadius))
+    let radiusExpansion: Double
+    if theme.hilitedCornerRadius > 0 {
+      radiusExpansion = 2 * extraExpansion / theme.hilitedCornerRadius
+        * max(0, theme.cornerRadius - theme.hilitedCornerRadius)
+    } else {
+      radiusExpansion = 0
+    }
+    let effectiveRadius = max(0, theme.hilitedCornerRadius + radiusExpansion)
 
     if theme.linear, let highlightedTextRange = convert(range: highlightedRange) {
       let (leadingRect, bodyRect, trailingRect) = multilineRects(forRange: highlightedTextRange, extraSurounding: separatorWidth, bounds: outerBox)
@@ -698,14 +760,30 @@ private extension SquirrelView {
 
       highlightedPoints = enlarge(vertex: highlightedPoints, by: extraExpansion)
       highlightedPoints = expand(vertex: highlightedPoints, innerBorder: innerBox, outerBorder: outerBox)
-      rightCorners = removeCorner(highlightedPoints: highlightedPoints, rightCorners: rightCorners, containingRect: currentContainingRect)
-      resultingPath = drawSmoothLines(highlightedPoints, straightCorner: rightCorners, alpha: 0.3*effectiveRadius, beta: 1.4*effectiveRadius)?.mutableCopy()
+      let highlightedBounds = boundingRect(of: highlightedPoints)
+      let highlightedRadius = max(0, min(effectiveRadius,
+                                          min(highlightedBounds.width, highlightedBounds.height) / 2))
+      if nearEmpty(leadingRect), nearEmpty(trailingRect), !nearEmpty(bodyRect) {
+        // A one-line linear candidate is a rectangle. Use AppKit's geometric
+        // rounded path instead of the generic multi-line smoothing routine.
+        resultingPath = roundedRectPath(highlightedBounds, radius: highlightedRadius)?.mutableCopy()
+      } else {
+        rightCorners = removeCorner(highlightedPoints: highlightedPoints, rightCorners: rightCorners, containingRect: currentContainingRect)
+        resultingPath = drawSmoothLines(highlightedPoints, straightCorner: rightCorners,
+                                        alpha: 0.55228475 * highlightedRadius,
+                                        beta: highlightedRadius)?.mutableCopy()
+      }
 
       if highlightedPoints2.count > 0 {
         highlightedPoints2 = enlarge(vertex: highlightedPoints2, by: extraExpansion)
         highlightedPoints2 = expand(vertex: highlightedPoints2, innerBorder: innerBox, outerBorder: outerBox)
         rightCorners2 = removeCorner(highlightedPoints: highlightedPoints2, rightCorners: rightCorners2, containingRect: currentContainingRect)
-        let highlightedPath2 = drawSmoothLines(highlightedPoints2, straightCorner: rightCorners2, alpha: 0.3*effectiveRadius, beta: 1.4*effectiveRadius)
+        let highlightedBounds2 = boundingRect(of: highlightedPoints2)
+        let highlightedRadius2 = max(0, min(effectiveRadius,
+                                             min(highlightedBounds2.width, highlightedBounds2.height) / 2))
+        let highlightedPath2 = drawSmoothLines(highlightedPoints2, straightCorner: rightCorners2,
+                                               alpha: 0.55228475 * highlightedRadius2,
+                                               beta: highlightedRadius2)
         if let highlightedPath2 = highlightedPath2 {
           resultingPath?.addPath(highlightedPath2)
         }
@@ -716,37 +794,20 @@ private extension SquirrelView {
         highlightedRect.size.width = backgroundRect.size.width
         highlightedRect.size.height += theme.linespace
         highlightedRect.origin = NSPoint(x: backgroundRect.origin.x, y: highlightedRect.origin.y + edgeInset.height - halfLinespace)
-        let contentLength = textContentStorage.attributedString?.length ?? 0
-        if preeditAtBottom {
-          // The visual order is reversed, so the first text range is at the
-          // top edge while the preedit is at the bottom edge.
-          if highlightedRange.location == 0 {
-            highlightedRect.size.height += edgeInset.height - halfLinespace
-            highlightedRect.origin.y -= edgeInset.height - halfLinespace
-          }
-          if preeditRange.length > 0,
-             preeditRange.location - highlightedRange.upperBound <= 1 {
-            highlightedRect.size.height += theme.hilitedCornerRadius / 2
-          }
-        } else {
-          if highlightedRange.upperBound == contentLength {
-            highlightedRect.size.height += edgeInset.height - halfLinespace
-          }
-          if highlightedRange.location - (preeditRange == .empty ? 0 : preeditRange.upperBound) <= 1 {
-            if preeditRange.length == 0 {
-              highlightedRect.size.height += edgeInset.height - halfLinespace
-              highlightedRect.origin.y -= edgeInset.height - halfLinespace
-            } else {
-              highlightedRect.size.height += theme.hilitedCornerRadius / 2
-              highlightedRect.origin.y -= theme.hilitedCornerRadius / 2
-            }
-          }
-        }
+        // Keep every stacked candidate highlight at the same row height.
+        // Previously the first and last ranges received extra edgeInset and
+        // hilitedCornerRadius padding here. That made the highlight jump in
+        // height solely because the selected index moved to an edge row. The
+        // panel background and its mask already provide the outer edge inset;
+        // it must not be added to an individual candidate row.
 
         var highlightedPoints = rectVertex(of: highlightedRect)
         highlightedPoints = enlarge(vertex: highlightedPoints, by: extraExpansion)
-        highlightedPoints = expand(vertex: highlightedPoints, innerBorder: innerBox, outerBorder: outerBox)
-        resultingPath = drawSmoothLines(highlightedPoints, straightCorner: Set(), alpha: effectiveRadius*0.3, beta: effectiveRadius*1.4)?.mutableCopy()
+        // Stacked rows are independent horizontal bands. Do not use the
+        // generic expansion here: its vertical clamp maps the first row to
+        // the outer top edge and the last row to the outer bottom edge.
+        highlightedPoints = expandStacked(vertex: highlightedPoints, innerBorder: innerBox, outerBorder: outerBox)
+        resultingPath = roundedRectPath(boundingRect(of: highlightedPoints), radius: effectiveRadius)?.mutableCopy()
       } else {
         resultingPath = nil
       }
@@ -778,7 +839,7 @@ private extension SquirrelView {
     guard theme.showPaging && (canPageUp || canPageDown) else { return (layer, nil, nil) }
     guard let firstCandidate = candidateRanges.first, let range = convert(range: firstCandidate) else { return (layer, nil, nil) }
     var height = contentRect(range: range).height
-    let preeditHeight = max(0, preeditRect.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 - edgeInset.height) + edgeInset.height - theme.linespace / 2
+    let preeditHeight = max(0, preeditRect.height + theme.preeditLinespace / 2 + edgeInset.height / 2 - edgeInset.height) + edgeInset.height - theme.linespace / 2
     height += theme.linespace
     let radius = min(0.5 * theme.pagingOffset, 2 * height / 9)
     let effectiveRadius = min(theme.cornerRadius, 0.6 * radius)
