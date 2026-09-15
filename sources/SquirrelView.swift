@@ -183,12 +183,17 @@ final class SquirrelView: NSView {
       let candidate = candidateRanges[i]
       if i == hilightedIndex {
         if candidate.length > 0 && theme.highlightedBackColor != nil {
-          highlightedPath = drawPath(highlightedRange: candidate, backgroundRect: backgroundRect, preeditRect: preeditRect, containingRect: containingRect, extraExpansion: 0)?.mutableCopy()
+          highlightedPath = drawPath(highlightedRange: candidate, backgroundRect: backgroundRect, preeditRect: preeditRect,
+                                     containingRect: containingRect, extraExpansion: 0,
+                                     expandLinearLeading: !theme.linear || i > 0,
+                                     expandLinearTrailing: !theme.linear || i + 1 < candidateRanges.count)?.mutableCopy()
         }
       } else {
         if candidate.length > 0 && theme.candidateBackColor != nil {
           let candidatePath = drawPath(highlightedRange: candidate, backgroundRect: backgroundRect, preeditRect: preeditRect,
-                                       containingRect: containingRect, extraExpansion: theme.surroundingExtraExpansion)
+                                       containingRect: containingRect, extraExpansion: theme.surroundingExtraExpansion,
+                                       expandLinearLeading: !theme.linear || i > 0,
+                                       expandLinearTrailing: !theme.linear || i + 1 < candidateRanges.count)
           if candidatePaths == nil {
             candidatePaths = CGMutablePath()
           }
@@ -449,7 +454,8 @@ private extension SquirrelView {
   }
 
   // Split a multiline range into leading, complete-body, and trailing boxes.
-  func multilineRects(forRange range: NSTextRange, extraSurounding: Double, bounds: NSRect) -> (NSRect, NSRect, NSRect) {
+  func multilineRects(forRange range: NSTextRange, extraSurounding: Double, bounds: NSRect,
+                      expandLeading: Bool = true, expandTrailing: Bool = true) -> (NSRect, NSRect, NSRect) {
     let edgeInset = panelEdgeInset ?? currentTheme.edgeInset
     var lineRects = [NSRect]()
     textLayoutManager.enumerateTextSegments(in: range, type: .selection, options: [.rangeNotRequired]) { _, rect, _, _ in
@@ -489,7 +495,12 @@ private extension SquirrelView {
 
     if extraSurounding > 0 {
       if nearEmpty(leadingRect) && nearEmpty(trailingRect) {
-        bodyRect = expandHighlightWidth(rect: bodyRect, extraSurrounding: extraSurounding)
+        // In a linear candidate row, the separator belongs between two
+        // candidates.  Do not let the first/last highlight claim half of a
+        // separator that has no neighbouring candidate on that side.
+        bodyRect = expandHighlightWidth(rect: bodyRect,
+                                        leadingSurrounding: expandLeading ? extraSurounding / 2 : 0,
+                                        trailingSurrounding: expandTrailing ? extraSurounding / 2 : 0)
       } else {
         if !(nearEmpty(leadingRect)) {
           leadingRect = expandHighlightWidth(rect: leadingRect, extraSurrounding: extraSurounding)
@@ -663,10 +674,17 @@ private extension SquirrelView {
   }
 
   func expandHighlightWidth(rect: NSRect, extraSurrounding: CGFloat) -> NSRect {
+    expandHighlightWidth(rect: rect,
+                         leadingSurrounding: extraSurrounding,
+                         trailingSurrounding: extraSurrounding)
+  }
+
+  func expandHighlightWidth(rect: NSRect, leadingSurrounding: CGFloat,
+                            trailingSurrounding: CGFloat) -> NSRect {
     var newRect = rect
     if !nearEmpty(newRect) {
-      newRect.size.width += extraSurrounding
-      newRect.origin.x -= extraSurrounding / 2
+      newRect.size.width += leadingSurrounding + trailingSurrounding
+      newRect.origin.x -= leadingSurrounding
     }
     return newRect
   }
@@ -705,7 +723,9 @@ private extension SquirrelView {
     return (highlightedPoints, highlightedPoints2, rightCorners, rightCorners2)
   }
 
-  func drawPath(highlightedRange: NSRange, backgroundRect: NSRect, preeditRect: NSRect, containingRect: NSRect, extraExpansion: Double) -> CGPath? {
+  func drawPath(highlightedRange: NSRange, backgroundRect: NSRect, preeditRect: NSRect,
+                containingRect: NSRect, extraExpansion: Double,
+                expandLinearLeading: Bool = true, expandLinearTrailing: Bool = true) -> CGPath? {
     let theme = currentTheme
     let edgeInset = panelEdgeInset ?? theme.edgeInset
     let resultingPath: CGMutablePath?
@@ -755,7 +775,11 @@ private extension SquirrelView {
     let effectiveRadius = max(0, theme.hilitedCornerRadius + radiusExpansion)
 
     if theme.linear, let highlightedTextRange = convert(range: highlightedRange) {
-      let (leadingRect, bodyRect, trailingRect) = multilineRects(forRange: highlightedTextRange, extraSurounding: separatorWidth, bounds: outerBox)
+      let (leadingRect, bodyRect, trailingRect) = multilineRects(forRange: highlightedTextRange,
+                                                                  extraSurounding: separatorWidth,
+                                                                  bounds: outerBox,
+                                                                  expandLeading: expandLinearLeading,
+                                                                  expandTrailing: expandLinearTrailing)
       var (highlightedPoints, highlightedPoints2, rightCorners, rightCorners2) = linearMultilineFor(body: bodyRect, leading: leadingRect, trailing: trailingRect)
 
       highlightedPoints = enlarge(vertex: highlightedPoints, by: extraExpansion)

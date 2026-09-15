@@ -646,21 +646,6 @@ private extension SquirrelPanel {
           }
         }
 
-        // The whole-window Liquid Glass surface is re-rendered by the window
-        // server on every frame change, racing against the app's content
-        // update. Below the caret the backdrop also repaints on each key, so
-        // width flutter shows up as random flicker. Quantize the width into
-        // coarse buckets, tracked in both directions: the panel still follows
-        // the content as it grows and shrinks, while sub-quantum flutter never
-        // touches the window frame. Status toasts keep their natural size:
-        // they show once and do not resize while visible.
-        if usesWindowGlass && theme.memorizeSize && !vertical && !showingStatus {
-          let widthQuantum: CGFloat = 20
-          let quantizedWidth = (contentRect.width / widthQuantum).rounded(.up) * widthQuantum
-          contentRect.size.width = quantizedWidth
-          naturalPanelSize.width = contentRect.width + edgeInset.width * 2 + theme.pagingOffset
-        }
-
         // TextKit 2 can report fractional line bounds that differ by a small
         // amount after each marked-text update. Those fractions still cause a
         // whole-window Liquid Glass panel to resize, and a fractional size also
